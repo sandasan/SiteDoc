@@ -28,9 +28,7 @@ async function clearResumeIfIdle(){
 async function startScan(message){
   const {activeJob}=await chrome.storage.local.get('activeJob');
   if(activeJob?.phase==='running')throw new Error('Другая фоновая операция ещё выполняется.');
-  const current=message.items.find(item=>canonical(item.url)===canonical(message.selectedUrl));
-  const startDepth=Number(current?.depth)||0;
-  const state={tabId:message.tabId,selectedUrl:message.selectedUrl,items:message.items,queue:message.items.filter(item=>(Number(item.depth)||0)>=startDepth),visited:[],stopReason:''};
+  const state={tabId:message.tabId,selectedUrl:message.selectedUrl,items:message.items,queue:[...message.items],visited:[],stopReason:''};
   const job={type:'scan',phase:'running',tabId:message.tabId,done:0,total:state.queue.length,startedAt:Date.now()};
   await chrome.storage.local.set({scanProgress:state,activeJob:job});
   await scheduleResume();

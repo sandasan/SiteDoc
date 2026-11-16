@@ -34,7 +34,7 @@ async function init() {
 
 function renderCandidates(items,currentUrl=''){
   candidatePages=new Map(items.map(item=>[item.url,item]));
-  const context=items.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Группа страниц из меню сайта';
+  const context=items.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Все разделы и подразделы, найденные в меню сайта';
   document.querySelector('#sectionContext').textContent=context;
   document.querySelector('#resultCount').textContent=items.length;
   sectionList.innerHTML=items.map(item=>{
@@ -48,7 +48,7 @@ function showJob(job){
   if(!job)return;
   activeJobState=job;
   if(job.phase==='running'||job.phase==='starting'){
-    status.textContent=job.type==='scan'?'Сканирую дерево страниц в фоне. Popup можно закрыть; результат появится здесь после повторного открытия.':`Сохраняю страницы в фоне: ${job.done||0} из ${job.total||0}. Popup можно закрыть.`;
+    status.textContent=job.type==='scan'?'Сканирую все разделы и подразделы в фоне. Popup можно закрыть; результат появится здесь после повторного открытия.':`Сохраняю страницы в фоне: ${job.done||0} из ${job.total||0}. Popup можно закрыть.`;
   }else if(job.phase==='complete'){
     if(job.type==='scan'){
       const message=job.stopReason?`Сканирование остановлено ответом сервера (${job.stopReason}).`:`Сканирование завершено: проверено ${job.done} страниц.`;
@@ -80,7 +80,7 @@ function renderAddButton(){
     addSelected.textContent=`Прервано: ${done} из ${total} · выполните новый поиск`;addSelected.disabled=true;return;
   }
   if(job?.type==='scan'&&(job.phase==='running'||job.phase==='starting')){
-    addSelected.classList.add('is-scan');addSelected.textContent='Сканирование раздела…';addSelected.disabled=true;return;
+    addSelected.classList.add('is-scan');addSelected.textContent='Поиск всех страниц…';addSelected.disabled=true;return;
   }
   addSelected.textContent=checked?`Добавить выбранные (${checked})`:'Выберите страницы';
   addSelected.disabled=checked===0;
@@ -331,95 +331,48 @@ async function saveCurrent() {
 }
 
 async function findSectionLinks() {
-  status.textContent='Ищу соседние страницы в меню документации…';
+  status.textContent='Ищу все разделы в меню документации…';
   try {
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
     const [injection]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>{
-      const here=new URL(location.href), canonical=value=>{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;};
-      const current=canonical(location.href), candidates=new Map();
-      const titleOf=a=>(a.innerText||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
-      const valid=(a)=>{try{const raw=a.getAttribute('href')||'';const u=new URL(a.href);return !raw.trim().startsWith('#')&&u.origin===here.origin&&!/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(u.pathname);}catch{return false;}};
-      const currentLinks=[...document.querySelectorAll('a[href]')].filter(a=>valid(a)&&canonical(a.href)===current);
-      const crumbNav=document.querySelector('[aria-label*="breadcrumb" i],.breadcrumb,.breadcrumbs');
-      let pageCrumbs=crumbNav?[...crumbNav.querySelectorAll('a,[aria-current="page"]')].map(a=>({title:titleOf(a),url:a.href})).filter(x=>x.title):[];
-      let best=null;
-      for(const anchor of currentLinks){
-        const li=anchor.closest('li'); if(!li)continue;
-        const list=li.parentElement; if(!list||!['UL','OL'].includes(list.tagName))continue;
-        const siblings=[...list.children].filter(child=>child.tagName==='LI').map(item=>{
-          const links=[...item.querySelectorAll('a[href]')].filter(a=>a.closest('ul,ol')===list);
-          return links[0]?{item,link:links[0]}:null;
-        }).filter(Boolean).filter(x=>valid(x.link)&&canonical(x.link.href)!==current);
-        const active=anchor.matches('[aria-current="page"],.md-nav__link--active,.active,.current');
-        const primary=!!anchor.closest('.md-nav--primary,.md-sidebar--primary,.wy-nav-side,.wy-menu,[role="tree"]');
-        const score=(active?100:0)+(primary?60:0)+(anchor.closest('.md-nav__list')?30:0)+Math.min(siblings.length,30);
-        if(siblings.length&&score>(best?.score??-1)){
-          const ancestors=[],ancestorNodes=[];let node=li.parentElement?.closest('li');
-          while(node){
-            const label=node.querySelector(':scope > a, :scope > label, :scope > span, :scope > div > a, :scope > div > span');
-            const text=(label?.innerText||label?.textContent||'').trim().replace(/\s+/g,' ');
-            if(text&&text.length<120)ancestors.unshift({title:text,url:label.href||''});
-            ancestorNodes.unshift({title:text,url:label?.href||'',isPage:label?.tagName==='A'&&valid(label)&&canonical(label.href)!==current});
-            node=node.parentElement?.closest('li');
-          }
-          best={links:siblings,crumbs:ancestors,ancestorNodes,score,list};
-        }
-      }
-      const ancestorPages=[],sectionBuffer=[];
-      for(const node of best?.ancestorNodes||[]){
-        if(node.isPage){ancestorPages.push({...node,parentSections:sectionBuffer.splice(0)});}
-        else if(node.title)sectionBuffer.push(node.title);
-      }
-      const basePath=ancestorPages.length?ancestorPages[0].parentSections.map(title=>({title,url:''})):(best?.crumbs?.length?best.crumbs:pageCrumbs);
-      const trailingSections=sectionBuffer;
-      const scanList=(list,parentUrl=null,ancestorTitles=[],depth=0,parentTitle='',parentSections=[])=>{
-        for(const item of [...list.children].filter(child=>child.tagName==='LI')){
-          const link=[...item.querySelectorAll('a[href]')].find(a=>a.closest('ul,ol')===list&&valid(a));
-          let nextParent=parentUrl,nextTitles=ancestorTitles,nextDepth=depth,nextParentTitle=parentTitle,nextSections=parentSections;
+      const here=new URL(location.href),canonical=value=>{try{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return '';}},current=canonical(location.href);
+      const titleOf=node=>(node?.innerText||node?.textContent||node?.getAttribute?.('aria-label')||node?.title||'').trim().replace(/\s+/g,' ');
+      const valid=a=>{try{const raw=a.getAttribute('href')||'',u=new URL(a.href);return !raw.trim().startsWith('#')&&u.origin===here.origin&&!/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(u.pathname);}catch{return false;}};
+      const candidates=new Map(),navRoots=[...document.querySelectorAll('nav, [role="navigation"], .md-nav, .wy-nav-side, .toctree-wrapper, .sidebar')];
+      const roots=navRoots.length?navRoots:[document.body];
+      const lists=[...new Set(roots.flatMap(root=>[...root.querySelectorAll('ul,ol')]))].filter(list=>!list.parentElement?.closest('ul,ol'));
+      const walk=(list,pageAncestors=[],sectionAncestors=[],depth=0)=>{
+        for(const li of [...list.children].filter(node=>node.tagName==='LI')){
+          const link=[...li.children].flatMap(node=>node.matches?.('a[href]')?[node]:[...node.querySelectorAll?.(':scope > a[href]')||[]]).find(valid);
+          let nextPages=pageAncestors,nextSections=sectionAncestors,nextDepth=depth;
           if(link){
             const url=canonical(link.href),title=titleOf(link);
-            if(title.length>1){
-              candidates.set(url,{url,title,breadcrumbs:basePath,navPath:[...basePath,...ancestorTitles.map(title=>({title,url:''}))],parentUrl,parentTitle,parentSections,depth});
-              nextParent=url;nextTitles=[...ancestorTitles,title];nextDepth=depth+1;nextParentTitle=title;nextSections=[];
+            if(title&&url){
+              const parent=pageAncestors.at(-1)||null, parentSections=sectionAncestors;
+              const navPath=[...pageAncestors.map(x=>({title:x.title,url:x.url})),...sectionAncestors.map(title=>({title,url:''}))];
+              if(url!==current)candidates.set(url,{url,title,breadcrumbs:[],navPath,parentUrl:parent?.url||null,parentTitle:parent?.title||'',parentSections,depth});
+              nextPages=[...pageAncestors,{title,url}];nextSections=[];nextDepth=depth+1;
             }
           }else{
-            const label=item.querySelector(':scope > label,:scope > span,:scope > div > span');
-            const sectionTitle=(label?.innerText||label?.textContent||'').trim().replace(/\s+/g,' ');
-            if(sectionTitle&&sectionTitle.length<120){nextTitles=[...ancestorTitles,sectionTitle];nextDepth=depth+1;nextSections=[...parentSections,sectionTitle];}
+            const label=[...li.children].find(node=>!['UL','OL'].includes(node.tagName));const title=titleOf(label);
+            if(title&&title.length<120){nextSections=[...sectionAncestors,title];nextDepth=depth+1;}
           }
-          const nested=[...item.querySelectorAll('ul,ol')].filter(child=>child.closest('li')===item);
-          for(const childList of nested)scanList(childList,nextParent,nextTitles,nextDepth,nextParentTitle,nextSections);
+          for(const nested of [...li.children].filter(node=>['UL','OL'].includes(node.tagName)))walk(nested,nextPages,nextSections,nextDepth);
         }
       };
-      let parentUrl=null,parentTitle='',ancestorTitles=[],depth=0;
-      for(const ancestor of ancestorPages){
-        const navPath=[...basePath,...ancestorTitles.map(title=>({title,url:''})),...ancestor.parentSections.map(title=>({title,url:''}))];
-        candidates.set(ancestor.url,{url:ancestor.url,title:ancestor.title,breadcrumbs:basePath,navPath,parentUrl,parentTitle,parentSections:ancestor.parentSections,depth});
-        parentUrl=ancestor.url;parentTitle=ancestor.title;ancestorTitles=[...ancestorTitles,...ancestor.parentSections,ancestor.title];depth++;
-      }
-      if(best?.list)scanList(best.list,parentUrl,ancestorTitles,depth,parentTitle,trailingSections);
-      // Fallback for sites without an explicit list-based navigation: use sibling URLs
-      // from the current path directory, but keep this lower priority than the nav tree.
-      if(!candidates.size){
-        const directory=here.pathname.slice(0,here.pathname.lastIndexOf('/')+1);
-        for(const a of document.querySelectorAll('a[href]')){
-          if(!valid(a))continue;const url=canonical(a.href),u=new URL(url);
-          if(url===current||!u.pathname.startsWith(directory))continue;
-          const title=titleOf(a);if(title.length>1&&!candidates.has(url))candidates.set(url,{url,title,breadcrumbs:pageCrumbs,navPath:pageCrumbs,parentUrl:null,parentTitle:'',parentSections:[],depth:0});
-        }
-      }
-      const siblingCount=candidates.size;
-      if(!candidates.has(current))candidates.set(current,{url:current,title:document.title||titleOf(currentLinks[0])||here.pathname.split('/').filter(Boolean).pop()||here.hostname,breadcrumbs:basePath,navPath:[...basePath,...ancestorTitles.map(title=>({title,url:''})),...trailingSections.map(title=>({title,url:''}))],parentUrl,parentTitle,parentSections:trailingSections,depth});
-      return {items:[...candidates.values()],siblingCount};
+      for(const list of lists)walk(list);
+      const title=document.querySelector('h1')?.innerText?.trim()||document.title||here.hostname;
+      if(!candidates.has(current))candidates.set(current,{url:current,title,breadcrumbs:[],navPath:[],parentUrl:null,parentTitle:'',parentSections:[],depth:0});
+      return {items:[...candidates.values()]};
     }});
-    let result=injection?.result?.items||[];
-    if(!result.length){status.textContent='На этой странице не удалось прочитать текущий адрес.';return;}
-    status.textContent=`Найдено ${result.length} страниц. Фоновый обход раздела продолжится, даже если закрыть popup…`;
+    const result=injection?.result?.items||[];
+    if(!result.length){status.textContent='На этой странице не удалось прочитать меню разделов.';return;}
+    status.textContent=`Найдено ${result.length} страниц. Проверяю всё дерево в фоне…`;
     await chrome.storage.local.set({sectionCandidates:result,activeJob:{type:'scan',phase:'starting',tabId:tab.id,done:0,total:result.length,startedAt:Date.now()}});
     chrome.runtime.sendMessage({type:'START_SECTION_SCAN',tabId:tab.id,items:result,selectedUrl:tab.url}).catch(error=>{activeJobState={type:'scan',phase:'error'};renderAddButton();status.textContent=`Не удалось запустить фоновое сканирование: ${error.message}`;void chrome.storage.local.set({activeJob:{type:'scan',phase:'error',error:error.message}});});
     renderCandidates(result,tab.url);
-    status.textContent='Обход выполняется в фоне. Popup можно закрыть; откройте его снова, чтобы посмотреть результат.';
-  }catch(e){status.textContent=`Не удалось прочитать раздел: ${e.message}`;}
+    status.textContent='Обнаружение всего дерева выполняется в фоне. Popup можно закрыть; откройте его снова, чтобы увидеть результат.';
+  }catch(e){status.textContent=`Не удалось прочитать разделы: ${e.message}`;}
 }
 
 async function fetchSelectedPages() {
