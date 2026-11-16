@@ -92,6 +92,16 @@
 .visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .popup .delete-libraries{display:block;width:auto;margin:-7px 0 11px auto;padding:2px 0;background:transparent;color:#a34440;font-size:10px;font-weight:500}
 .popup .delete-libraries:disabled{display:none}
+.popup-brand{position:relative;padding-right:36px}
+.popup .expand-popup{position:absolute;right:0;top:0;width:32px;height:32px;margin:0;padding:0;border:1px solid var(--line);background:#fff;color:var(--green);font-size:19px}
+.section-row{border-bottom:1px solid #edf0ee}
+.popup .section-row .section-link{border-bottom:0}
+.popup .subsection-toggle{display:block;width:auto;margin:0 0 6px calc(18px + var(--depth, 0)*13px);padding:2px 7px;border:1px solid #dce8e0;border-radius:6px;background:#f5f9f6;color:#426856;font-size:10px}
+.popup .subsection-toggle:hover{background:#eaf3ee}
+.popup-fullscreen{width:100%;min-width:0;background:#f7f9f7}
+.popup-fullscreen main{max-width:1100px;margin:0 auto;padding:28px 32px}
+.popup-fullscreen .section-preview #sectionLinks{max-height:calc(100vh - 420px);min-height:240px}
+@media(max-width:600px){.popup-fullscreen main{padding:18px 14px}.popup-fullscreen .section-preview #sectionLinks{max-height:55vh}}
 .bulk-actions{display:grid;gap:7px;margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:9px;background:#f8faf8}
 .bulk-actions label{display:flex;align-items:center;gap:7px;margin:0;font-size:12px;color:#52615a}
 .bulk-actions input{width:auto;margin:0}

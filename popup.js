@@ -43,13 +43,25 @@ function renderCandidates(items,currentUrl=''){
   const context=items.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Все разделы и подразделы, найденные в меню сайта';
   document.querySelector('#sectionContext').textContent=context;
   document.querySelector('#resultCount').textContent=items.length;
-  sectionList.innerHTML=items.map(item=>{
+  const lineage = item => [...(item.navPath?.length ? item.navPath : item.breadcrumbs || []).map(x=>({title:x.title,url:x.url||''})),{title:item.title,url:item.url}];
+  const paths=items.map(item=>({item,nodes:lineage(item)}));
+  sectionList.innerHTML=paths.map(({item,nodes})=>{
     const isCurrent=currentUrl&&normalizeUrl(item.url)===normalizeUrl(currentUrl),path=new URL(item.url).pathname,depth=Math.min(8,Math.max(0,Number(item.depth)||0));
     const alreadySaved=savedUrls.has(canonical(item.url));
-    return `<label class="section-link ${isCurrent?'is-current':''} ${depth?'is-descendant':''}" style="--depth:${depth}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${alreadySaved?'<span class="current-badge saved-badge">Уже в библиотеке</span>':''}${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>`;
+    const key=node=>`${node.url ? canonical(node.url) : hierarchyKey(node.title)}`;
+    const ownPath=nodes.map(key);
+    const descendants=paths.filter(candidate=>candidate.nodes.length>nodes.length&&nodes.every((node,index)=>key(node)===key(candidate.nodes[index])));
+    const bulk=descendants.length?`<button type="button" class="subsection-toggle" data-node="${esc(ownPath.join('|'))}" title="Выбрать или снять все страницы этого подраздела и вложенных подразделов">Выбрать подраздел (${descendants.length+1})</button>`:'';
+    return `<div class="section-row"><label class="section-link ${isCurrent?'is-current':''} ${depth?'is-descendant':''}" style="--depth:${depth}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${alreadySaved?'<span class="current-badge saved-badge">Уже в библиотеке</span>':''}${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>${bulk}</div>`;
   }).join('');
   selectAll.checked=true;selectAll.indeterminate=false;updateSelectionCount();preview.hidden=false;addSelected.hidden=false;
 }
+
+document.querySelector('#expandPopup').addEventListener('click',()=>{
+  if(new URLSearchParams(location.search).has('fullscreen')) return;
+  chrome.tabs.create({url:chrome.runtime.getURL('popup.html?fullscreen=1')});
+});
+if(new URLSearchParams(location.search).has('fullscreen'))document.body.classList.add('popup-fullscreen');
 
 function showJob(job){
   if(!job)return;
@@ -492,5 +504,19 @@ function updateSelectionCount(){
   renderAddButton();
 }
 sectionList.addEventListener('change',updateSelectionCount);
+sectionList.addEventListener('click',event=>{
+  const button=event.target.closest('.subsection-toggle');if(!button)return;
+  const target=button.dataset.node.split('|');
+  const rows=[...sectionList.querySelectorAll('.section-row')];
+  const matching=rows.filter(row=>{
+    const input=row.querySelector('input[type="checkbox"]');const item=candidatePages.get(input.value);if(!item)return false;
+    const nodes=[...(item.navPath?.length?item.navPath:item.breadcrumbs||[]).map(x=>({title:x.title,url:x.url||''})),{title:item.title,url:item.url}];
+    const keys=nodes.map(node=>node.url?(()=>{try{const u=new URL(node.url);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return node.url;}})():hierarchyKey(node.title));
+    return keys.length>=target.length&&target.every((key,index)=>keys[index]===key);
+  });
+  const shouldCheck=matching.some(row=>!row.querySelector('input[type="checkbox"]').checked);
+  matching.forEach(row=>{row.querySelector('input[type="checkbox"]').checked=shouldCheck;});
+  updateSelectionCount();
+});
 selectAll.addEventListener('change',e=>{sectionList.querySelectorAll('input[type=checkbox]').forEach(x=>x.checked=e.target.checked);updateSelectionCount();});
 init();
