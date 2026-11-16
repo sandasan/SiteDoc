@@ -206,7 +206,6 @@ async function findSectionLinks() {
       for(const {link} of chosen){
         const url=canonical(link.href),title=titleOf(link);if(title.length>1)candidates.set(url,{url,title,breadcrumbs:best?.crumbs?.length?best.crumbs:pageCrumbs});
       }
-      if(best)candidates.set(current,{url:current,title:document.title||titleOf(currentLinks[0]),breadcrumbs:best.crumbs.length?best.crumbs:pageCrumbs});
       // Fallback for sites without an explicit list-based navigation: use sibling URLs
       // from the current path directory, but keep this lower priority than the nav tree.
       if(!candidates.size){
@@ -217,10 +216,12 @@ async function findSectionLinks() {
           const title=titleOf(a);if(title.length>1&&!candidates.has(url))candidates.set(url,{url,title,breadcrumbs:pageCrumbs});
         }
       }
-      return [...candidates.values()].slice(0,30);
+      const siblingCount=candidates.size;
+      if(!candidates.has(current))candidates.set(current,{url:current,title:document.title||titleOf(currentLinks[0])||here.pathname.split('/').filter(Boolean).pop()||here.hostname,breadcrumbs:best?.crumbs?.length?best.crumbs:pageCrumbs});
+      return {items:[...candidates.values()].slice(0,30),siblingCount};
     }});
-    const result=injection?.result||[];
-    if(!result.length){status.textContent='На этой странице не удалось найти список ссылок меню. Проверьте, что открыта обычная страница документации и меню раздела загружено.';return;}
+    const result=injection?.result?.items||[];
+    if(!result.length){status.textContent='На этой странице не удалось прочитать текущий адрес.';return;}
     candidatePages=new Map(result.map(item=>[item.url,item]));
     const context=result.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Группа страниц из меню сайта';
     document.querySelector('#sectionContext').textContent=context;
@@ -232,7 +233,7 @@ async function findSectionLinks() {
     }).join('');
     selectAll.checked=true;selectAll.indeterminate=false;updateSelectionCount();
     preview.hidden=false; addSelected.hidden=false;
-    status.textContent='Отметьте страницы, которые хотите сохранить. Текущая страница тоже включена.';
+    status.textContent=injection.result.siblingCount===0?'Соседние страницы не найдены; текущую страницу всё равно можно добавить.':'Отметьте страницы, которые хотите сохранить. Текущая страница тоже включена.';
   }catch(e){status.textContent=`Не удалось прочитать раздел: ${e.message}`;}
 }
 
