@@ -268,7 +268,7 @@ async function findSectionLinks() {
       }
       const siblingCount=candidates.size;
       if(!candidates.has(current))candidates.set(current,{url:current,title:document.title||titleOf(currentLinks[0])||here.pathname.split('/').filter(Boolean).pop()||here.hostname,breadcrumbs:best?.crumbs?.length?best.crumbs:pageCrumbs});
-      return {items:[...candidates.values()].slice(0,30),siblingCount};
+      return {items:[...candidates.values()],siblingCount};
     }});
     const result=injection?.result?.items||[];
     if(!result.length){status.textContent='На этой странице не удалось прочитать текущий адрес.';return;}
@@ -288,14 +288,27 @@ async function findSectionLinks() {
 }
 
 async function fetchSelectedPages() {
-  const urls=[...sectionList.querySelectorAll('input:checked')].map(input=>input.value).slice(0,30);
+    const urls=[...sectionList.querySelectorAll('input:checked')].map(input=>input.value);
   if(!urls.length){status.textContent='Выберите хотя бы одну страницу.';return;}
   status.textContent=`Добавляю ${urls.length} страниц…`;
   addSelected.disabled=true;
   try{
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
-    const descriptors=[...sectionList.querySelectorAll('input:checked')].slice(0,30).map(input=>({url:input.value,...(candidatePages.get(input.value)||{})}));
-    const [result]=await chrome.scripting.executeScript({target:{tabId:tab.id},args:[descriptors],func:async descriptors=>{
+    const descriptors=[...sectionList.querySelectorAll('input:checked')].map(input=>({url:input.value,...(candidatePages.get(input.value)||{})}));
+    const {collections=[]}=await read(['collections']);
+    const collection=collections.find(c=>c.id===select.value);if(!collection)throw new Error('Выбранная библиотека больше не существует.');
+    const canonical=url=>{try{const u=new URL(url);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return url;}};
+    const existingUrls=new Set(collection.items.filter(item=>item.kind!=='section').map(item=>canonical(item.url)));
+    const duplicateCount=descriptors.filter(item=>existingUrls.has(canonical(item.url))).length;
+    const updateExisting=duplicateCount?confirm(`В библиотеке уже сохранено страниц из списка: ${duplicateCount}. Обновить эти копии?`):false;
+    let added=0,updated=0,failed=0;
+    const batchSize=5;
+    for(let offset=0;offset<descriptors.length;offset+=batchSize){
+      const batch=descriptors.slice(offset,offset+batchSize);
+      const end=Math.min(offset+batch.length,descriptors.length);
+      status.textContent=`Загружаю страницы ${offset+1}–${end} из ${descriptors.length}…`;
+      try{
+        const [injection]=await chrome.scripting.executeScript({target:{tabId:tab.id},args:[batch],func:async descriptors=>{
       const output=[];
       for(const descriptor of descriptors){
         const {url}=descriptor;
@@ -337,14 +350,17 @@ async function fetchSelectedPages() {
         }catch(error){output.push({url,error:error.message});}
       }
       return output;
-    }});
-    const pages=result.result||[], {collections=[]}=await read(['collections']);
-    const collection=collections.find(c=>c.id===select.value);let added=0,updated=0,failed=0;
-    const canonical=url=>{try{const u=new URL(url);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return url;}};
-    const incomingDuplicates=pages.filter(page=>!page.error&&collection.items.some(item=>item.kind!=='section'&&canonical(item.url)===canonical(page.url))).length;
-    const updateExisting=incomingDuplicates?confirm(`В коллекции уже сохранено страниц из списка: ${incomingDuplicates}. Обновить эти копии?`):false;
-    for(const page of pages){if(page.error){failed++;continue;}const outcome=saveToCollection(collection,page,updateExisting);if(outcome==='added')added++;else if(outcome==='updated')updated++;}
-    await chrome.storage.local.set({collections});
+        }});
+        const pages=injection?.result||[];
+        for(const page of pages){
+          if(page.error){failed++;continue;}
+          const outcome=saveToCollection(collection,page,updateExisting);
+          if(outcome==='added')added++;else if(outcome==='updated')updated++;
+        }
+        failed+=Math.max(0,batch.length-pages.length);
+        await chrome.storage.local.set({collections});
+      }catch(error){failed+=batch.length;status.textContent=`Партия ${offset+1}–${end} не загрузилась: ${error.message}`;}
+    }
     preview.hidden=true;addSelected.hidden=true;
     status.textContent=`Готово: добавлено ${added}, обновлено ${updated}${failed?`, ошибок ${failed}`:''}.`;
   }catch(e){status.textContent=`Ошибка сбора раздела: ${e.message}`;}
