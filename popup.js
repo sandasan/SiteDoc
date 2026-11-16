@@ -496,6 +496,14 @@ async function fetchSelectedPages() {
 
 document.querySelector('#save').addEventListener('click',saveCurrent);
 document.querySelector('#findSection').addEventListener('click',findSectionLinks);
+document.querySelector('#editPageMenu').addEventListener('click',async()=>{
+  try{
+    const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+    if(!tab?.id)throw new Error('Не удалось получить открытую вкладку.');
+    await chrome.scripting.executeScript({target:{tabId:tab.id},files:['page-editor.js']});
+    status.textContent='Режим выбора включён на странице. Для выхода нажмите × в панели SiteDoc.';
+  }catch(error){status.textContent=`Не удалось включить режим на этой странице: ${error.message}`;}
+});
 addSelected.addEventListener('click',fetchSelectedPages);
 function updateSelectionCount(){
   const boxes=[...sectionList.querySelectorAll('input[type=checkbox]')],checked=boxes.filter(x=>x.checked).length;

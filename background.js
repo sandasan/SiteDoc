@@ -23,12 +23,12 @@ chrome.storage.onChanged.addListener((changes,area)=>{
 chrome.runtime.onInstalled.addListener(()=>void chrome.storage.local.get('activeJob').then(({activeJob})=>updateActionIndicator(activeJob)));
 void chrome.storage.local.get('activeJob').then(({activeJob})=>updateActionIndicator(activeJob));
 
-chrome.runtime.onMessage.addListener((message,_sender,sendResponse)=>{
+chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.type==='START_SECTION_SCAN'){
     startScan(message).then(()=>sendResponse({started:true}),error=>sendResponse({error:error.message}));return true;
   }
   if(message?.type==='START_SECTION_IMPORT'){
-    startImport(message).then(()=>sendResponse({started:true}),error=>sendResponse({error:error.message}));return true;
+    startImport({...message,tabId:message.tabId||sender.tab?.id}).then(()=>sendResponse({started:true}),error=>sendResponse({error:error.message}));return true;
   }
 });
 
