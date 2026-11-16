@@ -108,6 +108,7 @@ function renderLibrarySelect(selectedId) {
   document.querySelector('#save').disabled = !collections.length;
   document.querySelector('#findSection').disabled = !collections.length;
   document.querySelector('#deleteAllLibraries').disabled = !collections.length;
+  document.querySelector('#deleteLibrary').disabled = !collections.length;
 }
 
 select.addEventListener('change', () => chrome.storage.local.set({ selectedCollectionId: select.value }));
@@ -145,6 +146,21 @@ document.querySelector('#deleteAllLibraries').addEventListener('click', async ()
   renderLibrarySelect('');
   preview.hidden = true; addSelected.hidden = true;
   status.textContent = 'Все библиотеки удалены. Создайте новую, чтобы продолжить.';
+});
+document.querySelector('#deleteLibrary').addEventListener('click', async () => {
+  const library = collections.find(item => item.id === select.value);
+  if (!library) return;
+  const pageCount = library.items.filter(item => item.kind !== 'section').length;
+  const detail = pageCount ? ` вместе с ${pageCount} сохранёнными страницами` : ' (она пуста)';
+  if (!confirm(`Удалить библиотеку «${library.title}»${detail}? Это действие нельзя отменить.`)) return;
+  const index = collections.findIndex(item => item.id === library.id);
+  collections = collections.filter(item => item.id !== library.id);
+  const next = collections[Math.min(index, collections.length - 1)];
+  await chrome.storage.local.set({ collections, selectedCollectionId: next?.id || '' });
+  renderLibrarySelect(next?.id || '');
+  status.textContent = next
+    ? `Библиотека «${library.title}» удалена. Выбрана «${next.title}».`
+    : `Библиотека «${library.title}» удалена. Создайте новую, чтобы продолжить.`;
 });
 
 function normalizeUrl(value) {
