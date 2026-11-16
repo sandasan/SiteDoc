@@ -3,6 +3,26 @@ let scanRunning=false;
 let importRunning=false;
 const canonical=value=>{try{const u=new URL(value);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return String(value||'');}};
 
+async function updateActionIndicator(job){
+  if(job?.phase==='running'||job?.phase==='starting'){
+    const total=Math.max(1,Number(job.total)||1),done=Math.max(0,Number(job.done)||0);
+    const percent=Math.min(100,Math.floor(done/total*100));
+    const label=job.type==='import'?'Сохранение страниц':'Поиск страниц';
+    await chrome.action.setBadgeBackgroundColor({color:'#39785b'});
+    await chrome.action.setBadgeText({text:`${percent}%`});
+    await chrome.action.setTitle({title:`SiteDoc — ${label}: ${done} из ${total}`});
+  }else{
+    await chrome.action.setBadgeText({text:''});
+    await chrome.action.setTitle({title:'Добавить страницу в SiteDoc'});
+  }
+}
+
+chrome.storage.onChanged.addListener((changes,area)=>{
+  if(area==='local'&&changes.activeJob)void updateActionIndicator(changes.activeJob.newValue);
+});
+chrome.runtime.onInstalled.addListener(()=>void chrome.storage.local.get('activeJob').then(({activeJob})=>updateActionIndicator(activeJob)));
+void chrome.storage.local.get('activeJob').then(({activeJob})=>updateActionIndicator(activeJob));
+
 chrome.runtime.onMessage.addListener((message,_sender,sendResponse)=>{
   if(message?.type==='START_SECTION_SCAN'){
     startScan(message).then(()=>sendResponse({started:true}),error=>sendResponse({error:error.message}));return true;
