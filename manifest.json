@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "SiteDoc — офлайн-библиотека сайтов",
+  "version": "0.1.0",
+  "description": "Сохраняйте страницы сайтов в коллекции и экспортируйте их в EPUB или PDF.",
+  "permissions": ["activeTab", "scripting", "storage", "downloads"],
+  "action": { "default_title": "Добавить страницу в SiteDoc", "default_popup": "popup.html" },
+  "options_page": "library.html"
+}

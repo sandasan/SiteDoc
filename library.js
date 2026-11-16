@@ -1,0 +1,56 @@
+const $ = s => document.querySelector(s);
+let collections = [], selectedCollection = '', selectedPage = '';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const current = () => collections.find(c => c.id === selectedCollection);
+const items = () => current()?.items || [];
+const persist = () => chrome.storage.local.set({ collections });
+
+async function init() {
+  ({ collections = [] } = await chrome.storage.local.get('collections'));
+  if (!collections.length) { collections = [{ id: crypto.randomUUID(), title: 'Моя библиотека', items: [] }]; await persist(); }
+  selectedCollection = collections[0].id; render();
+}
+function render() {
+  $('#collections').innerHTML = collections.map(c => `<option value="${c.id}" ${c.id === selectedCollection ? 'selected' : ''}>${esc(c.title)} (${c.items.length})</option>`).join('');
+  const list = items();
+  $('#outline').innerHTML = list.map((p, i) => {
+    let level = 0, parent = p.parentId;
+    while (parent && level < 3) { level++; parent = list.find(x => x.id === parent)?.parentId; }
+    level = Math.min(3, level);
+    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${p.id}"><span class="tree-title" title="${esc(p.url)}">${esc(p.title)}</span><button class="icon-button" data-act="up" title="Вверх">↑</button><button class="icon-button" data-act="down" title="Вниз">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущую">↳</button></div></li>`;
+  }).join('') || '<li class="empty small">В этой коллекции пока нет страниц. Откройте страницу и добавьте её через значок расширения.</li>';
+  $('#outline').querySelectorAll('.outline-item').forEach(row => row.addEventListener('click', e => {
+    const id = row.dataset.id, act = e.target.dataset.act;
+    if (act) { e.stopPropagation(); move(id, act); } else { selectedPage = id; render(); }
+  }));
+  const p = list.find(x => x.id === selectedPage);
+  $('#empty').hidden = !!p; $('#page').hidden = !p;
+  if (p) { $('#title').value = p.title; $('#url').value = p.url; $('#content').textContent = p.text || '(Текст на этой странице не найден.)'; }
+}
+function move(id, action) {
+  const a = items(), i = a.findIndex(p => p.id === id); if (i < 0) return;
+  if (action === 'up' && i > 0) [a[i-1], a[i]] = [a[i], a[i-1]];
+  if (action === 'down' && i < a.length-1) [a[i+1], a[i]] = [a[i], a[i+1]];
+  if (action === 'indent' && i > 0) a[i].parentId = a[i-1].id;
+  persist().then(render);
+}
+$('#collections').addEventListener('change', e => { selectedCollection = e.target.value; selectedPage = ''; render(); });
+$('#addCollection').addEventListener('click', async () => { const title = $('#newCollection').value.trim(); if (!title) return; const c = { id: crypto.randomUUID(), title, items: [] }; collections.push(c); selectedCollection = c.id; selectedPage = ''; $('#newCollection').value = ''; await persist(); render(); });
+$('#title').addEventListener('change', async e => { const p = items().find(x => x.id === selectedPage); if (p) { p.title = e.target.value.trim() || p.title; await persist(); render(); } });
+$('#url').addEventListener('change', async e => { const p = items().find(x => x.id === selectedPage); if (p) { p.url = e.target.value; await persist(); } });
+$('#up').onclick = () => move(selectedPage, 'up'); $('#down').onclick = () => move(selectedPage, 'down'); $('#indent').onclick = () => move(selectedPage, 'indent');
+$('#outdent').onclick = async () => { const p = items().find(x => x.id === selectedPage); if (p) { p.parentId = null; await persist(); render(); } };
+$('#delete').onclick = async () => { const c = current(); c.items = c.items.filter(p => p.id !== selectedPage && p.parentId !== selectedPage); selectedPage = ''; await persist(); render(); };
+$('#exportPdf').onclick = () => { const c = current(); if (!c?.items.length) return; const w = window.open('', '_blank'); w.document.write(printDocument(c)); w.document.close(); w.focus(); setTimeout(() => w.print(), 500); };
+function printDocument(c) {
+  const rows = c.items.map((p,i) => `<article><h${p.parentId ? 2 : 1}>${esc(p.title)}</h${p.parentId ? 2 : 1}><p class="source"><a href="${esc(p.url)}">${esc(p.url)}</a></p><div>${esc(p.text || '')}</div></article>`).join('');
+  return `<!doctype html><html lang="ru"><meta charset="utf-8"><title>${esc(c.title)}</title><style>body{font:12pt/1.55 Georgia,serif;max-width:760px;margin:2cm auto;color:#222}h1{font-size:25pt;margin:0 0 5mm}h2{font-size:18pt;break-after:avoid}.source{font:9pt sans-serif;color:#666;overflow-wrap:anywhere}article{break-before:page}article:first-of-type{break-before:auto}@media screen{body{padding:24px}}@page{margin:18mm}</style><h1>${esc(c.title)}</h1>${rows}</html>`;
+}
+
+// Small dependency-free ZIP writer (stored entries) for EPUB 3 export.
+const crcTable = (() => { const t = new Uint32Array(256); for (let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xedb88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t; })();
+function crc32(bytes){let c=0xffffffff;for(const b of bytes)c=crcTable[(c^b)&255]^(c>>>8);return (c^0xffffffff)>>>0;}
+function zip(files){const enc=new TextEncoder(), local=[], central=[];let offset=0;for(const f of files){const name=enc.encode(f.name),data=typeof f.data==='string'?enc.encode(f.data):f.data,crc=crc32(data),lh=new Uint8Array(30+name.length),lv=new DataView(lh.buffer);lv.setUint32(0,0x04034b50,true);lv.setUint16(4,20,true);lv.setUint32(14,crc,true);lv.setUint32(18,data.length,true);lv.setUint32(22,data.length,true);lv.setUint16(26,name.length,true);lh.set(name,30);local.push(lh,data);const ch=new Uint8Array(46+name.length),cv=new DataView(ch.buffer);cv.setUint32(0,0x02014b50,true);cv.setUint16(4,20,true);cv.setUint16(6,20,true);cv.setUint32(16,crc,true);cv.setUint32(20,data.length,true);cv.setUint32(24,data.length,true);cv.setUint16(28,name.length,true);cv.setUint32(42,offset,true);ch.set(name,46);central.push(ch);offset+=lh.length+data.length;}const centralSize=central.reduce((n,x)=>n+x.length,0),end=new Uint8Array(22),v=new DataView(end.buffer);v.setUint32(0,0x06054b50,true);v.setUint16(8,files.length,true);v.setUint16(10,files.length,true);v.setUint32(12,centralSize,true);v.setUint32(16,offset,true);return new Blob([...local,...central,end],{type:'application/epub+zip'});}
+function epub(c){const uid=crypto.randomUUID(), enc=s=>esc(s), list=c.items;const manifest=list.map((p,i)=>`<item id="p${i}" href="p${i}.xhtml" media-type="application/xhtml+xml"/>`).join('');const spine=list.map((p,i)=>`<itemref idref="p${i}"/>`).join('');const children=parent=>list.filter(p=>(p.parentId||null)===parent);const navTree=parent=>children(parent).map(p=>{const i=list.indexOf(p), nested=navTree(p.id);return `<li><a href="p${i}.xhtml">${enc(p.title)}</a>${nested?`<ol>${nested}</ol>`:''}</li>`;}).join('');const files=[{name:'mimetype',data:'application/epub+zip'},{name:'META-INF/container.xml',data:'<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'},{name:'OEBPS/nav.xhtml',data:`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>${enc(c.title)}</title></head><body><nav epub:type="toc"><h1>${enc(c.title)}</h1><ol>${navTree(null)}</ol></nav></body></html>`},{name:'OEBPS/content.opf',data:`<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="ru"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:${uid}</dc:identifier><dc:title>${enc(c.title)}</dc:title><dc:language>ru</dc:language><meta property="dcterms:modified">${new Date().toISOString().slice(0,19)}Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>${manifest}</manifest><spine>${spine}</spine></package>`},...list.map((p,i)=>({name:`OEBPS/p${i}.xhtml`,data:`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ru"><head><title>${enc(p.title)}</title><meta charset="utf-8"/><style>body{font-family:serif;line-height:1.55}a{overflow-wrap:anywhere}.source{font-size:.85em;color:#555}pre{white-space:pre-wrap}</style></head><body><h1>${enc(p.title)}</h1><p class="source"><a href="${enc(p.url)}">${enc(p.url)}</a></p><pre>${enc(p.text||'')}</pre></body></html>`}))];return zip(files);}
+$('#exportEpub').onclick = async () => { const c = current(); if (!c?.items.length) return; const blob=epub(c), url=URL.createObjectURL(blob); await chrome.downloads.download({url,filename:`${c.title.replace(/[\\/:*?"<>|]/g,'_')}.epub`,saveAs:true}); setTimeout(()=>URL.revokeObjectURL(url),60000); };
+init();

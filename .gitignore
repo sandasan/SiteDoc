@@ -1,0 +1,24 @@
+# Local environment and editor settings
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Dependencies and generated build output
+node_modules/
+dist/
+build/
+coverage/
+
+# Local logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Browser profile data and exported documents
+chrome-profile/
+*.epub
+*.pdf
