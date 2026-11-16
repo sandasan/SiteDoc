@@ -1,14 +1,16 @@
 const $ = s => document.querySelector(s);
 let collections = [], selectedCollection = '', selectedPage = '';
+const selectedForDelete = new Set();
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const current = () => collections.find(c => c.id === selectedCollection);
 const items = () => current()?.items || [];
 const persist = () => chrome.storage.local.set({ collections });
 
 async function init() {
-  ({ collections = [] } = await chrome.storage.local.get('collections'));
-  if (!collections.length) { collections = [{ id: crypto.randomUUID(), title: 'Моя библиотека', items: [] }]; await persist(); }
-  selectedCollection = collections[0].id; render();
+  const saved = await chrome.storage.local.get('collections');
+  collections = Array.isArray(saved.collections) ? saved.collections : [{ id: crypto.randomUUID(), title: 'Моя библиотека', items: [] }];
+  if (!Array.isArray(saved.collections)) await persist();
+  selectedCollection = collections[0]?.id || ''; render();
 }
 function render() {
   $('#collections').innerHTML = collections.map(c => `<option value="${c.id}" ${c.id === selectedCollection ? 'selected' : ''}>${esc(c.title)} (${c.items.length})</option>`).join('');
@@ -17,11 +19,16 @@ function render() {
     let level = 0, parent = p.parentId;
     while (parent && level < 3) { level++; parent = list.find(x => x.id === parent)?.parentId; }
     level = Math.min(3, level);
-    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${esc(p.id)}"><span class="tree-title" title="${esc(p.url || p.title)}">${p.kind === 'section' ? '▸ ' : ''}${esc(p.title)}</span><button class="icon-button" data-act="up" title="Вверх">↑</button><button class="icon-button" data-act="down" title="Вниз">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущую">↳</button></div></li>`;
+    const checkbox = p.kind === 'section' ? '' : `<input class="page-selector" data-select-page="${esc(p.id)}" type="checkbox" aria-label="Выбрать ${esc(p.title)} для удаления" ${selectedForDelete.has(p.id) ? 'checked' : ''}>`;
+    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${esc(p.id)}">${checkbox}<span class="tree-title" title="${esc(p.url || p.title)}">${p.kind === 'section' ? '▸ ' : ''}${esc(p.title)}</span><button class="icon-button" data-act="up" title="Вверх">↑</button><button class="icon-button" data-act="down" title="Вниз">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущую">↳</button></div></li>`;
   }).join('') || '<li class="empty small">В этой коллекции пока нет страниц. Откройте страницу и добавьте её через значок расширения.</li>';
   $('#outline').querySelectorAll('.outline-item').forEach(row => row.addEventListener('click', e => {
     const id = row.dataset.id, act = e.target.dataset.act;
-    if (act) { e.stopPropagation(); move(id, act); } else { selectedPage = id; render(); }
+    if (e.target.matches('[data-select-page]')) {
+      e.stopPropagation();
+      if (e.target.checked) selectedForDelete.add(id); else selectedForDelete.delete(id);
+      updateBulkDeleteControls();
+    } else if (act) { e.stopPropagation(); move(id, act); } else { selectedPage = id; render(); }
   }));
   const p = list.find(x => x.id === selectedPage);
   $('#empty').hidden = !!p; $('#page').hidden = !p;
@@ -38,6 +45,16 @@ function render() {
       renderPagePreview(p);
     }
   }
+  updateBulkDeleteControls();
+}
+
+function updateBulkDeleteControls() {
+  const pageItems = items().filter(item => item.kind !== 'section');
+  for (const id of [...selectedForDelete]) if (!pageItems.some(item => item.id === id)) selectedForDelete.delete(id);
+  $('#selectAllPages').checked = pageItems.length > 0 && pageItems.every(item => selectedForDelete.has(item.id));
+  $('#selectAllPages').indeterminate = selectedForDelete.size > 0 && selectedForDelete.size < pageItems.length;
+  $('#deleteSelectedPages').disabled = selectedForDelete.size === 0;
+  $('#deleteSelectedPages').textContent = `Удалить выбранные (${selectedForDelete.size})`;
 }
 function renderPagePreview(p) {
   const parsed = new DOMParser().parseFromString(p.html || `<pre>${esc(p.text || '')}</pre>`, 'text/html');
@@ -87,8 +104,38 @@ function move(id, action) {
   }
   persist().then(render);
 }
-$('#collections').addEventListener('change', e => { selectedCollection = e.target.value; selectedPage = ''; render(); });
+$('#collections').addEventListener('change', e => { selectedCollection = e.target.value; selectedPage = ''; selectedForDelete.clear(); render(); });
 $('#addCollection').addEventListener('click', async () => { const title = $('#newCollection').value.trim(); if (!title) return; const c = { id: crypto.randomUUID(), title, items: [] }; collections.push(c); selectedCollection = c.id; selectedPage = ''; $('#newCollection').value = ''; await persist(); render(); });
+$('#selectAllPages').addEventListener('change', e => {
+  const pageItems = items().filter(item => item.kind !== 'section');
+  selectedForDelete.clear();
+  if (e.target.checked) pageItems.forEach(item => selectedForDelete.add(item.id));
+  render();
+});
+$('#deleteSelectedPages').addEventListener('click', async () => {
+  const c = current(), removedIds = new Set(selectedForDelete);
+  if (!c || !removedIds.size) return;
+  if (!confirm(`Удалить ${removedIds.size} выбранных страниц? Это действие нельзя отменить.`)) return;
+  const removed = new Map(c.items.filter(item => removedIds.has(item.id)).map(item => [item.id, item]));
+  c.items = c.items.filter(item => !removedIds.has(item.id));
+  for (const item of c.items) {
+    let parent = item.parentId; const visited = new Set();
+    while (parent && removed.has(parent) && !visited.has(parent)) { visited.add(parent); parent = removed.get(parent).parentId; }
+    item.parentId = parent || null;
+  }
+  const usedAncestors = new Set();
+  for (const item of c.items.filter(x => x.kind !== 'section')) {
+    let parent = item.parentId;
+    while (parent && !usedAncestors.has(parent)) {
+      usedAncestors.add(parent);
+      parent = c.items.find(x => x.id === parent)?.parentId;
+    }
+  }
+  c.items = c.items.filter(item => item.kind !== 'section' || usedAncestors.has(item.id));
+  if (removedIds.has(selectedPage)) selectedPage = '';
+  selectedForDelete.clear();
+  await persist(); render();
+});
 $('#title').addEventListener('change', async e => { const p = items().find(x => x.id === selectedPage); if (p) { p.title = e.target.value.trim() || p.title; await persist(); render(); } });
 $('#url').addEventListener('change', async e => { const p = items().find(x => x.id === selectedPage); if (p) { p.url = e.target.value; await persist(); } });
 $('#up').onclick = () => move(selectedPage, 'up'); $('#down').onclick = () => move(selectedPage, 'down'); $('#indent').onclick = () => move(selectedPage, 'indent');

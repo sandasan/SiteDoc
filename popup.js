@@ -13,15 +13,30 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 
 async function init() {
   const saved = await read(['collections', 'selectedCollectionId']);
-  collections = saved.collections || [];
-  if (!collections.length) {
+  collections = Array.isArray(saved.collections) ? saved.collections : [];
+  if (!Array.isArray(saved.collections)) {
     const first = { id: crypto.randomUUID(), title: 'Моя библиотека', items: [] };
     collections = [first];
+    saved.selectedCollectionId = first.id;
     await chrome.storage.local.set({ collections, selectedCollectionId: first.id });
   }
-  select.innerHTML = collections.map(c => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join('');
-  select.value = collections.some(c => c.id === saved.selectedCollectionId) ? saved.selectedCollectionId : collections[0].id;
-  if (select.value !== saved.selectedCollectionId) await chrome.storage.local.set({ selectedCollectionId: select.value });
+  const selectedId = collections.some(c => c.id === saved.selectedCollectionId) ? saved.selectedCollectionId : collections[0]?.id;
+  renderLibrarySelect(selectedId);
+  if (selectedId && selectedId !== saved.selectedCollectionId) await chrome.storage.local.set({ selectedCollectionId: selectedId });
+}
+
+function renderLibrarySelect(selectedId) {
+  if (!collections.length) {
+    select.innerHTML = '<option value="" selected>Сначала создайте библиотеку</option>';
+    select.disabled = true;
+  } else {
+    select.innerHTML = collections.map(c => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join('');
+    select.value = selectedId || collections[0].id;
+    select.disabled = false;
+  }
+  document.querySelector('#save').disabled = !collections.length;
+  document.querySelector('#findSection').disabled = !collections.length;
+  document.querySelector('#deleteAllLibraries').disabled = !collections.length;
 }
 
 select.addEventListener('change', () => chrome.storage.local.set({ selectedCollectionId: select.value }));
@@ -47,10 +62,18 @@ createLibraryForm.addEventListener('submit', async event => {
   const created = { id: crypto.randomUUID(), title, items: [] };
   collections.push(created);
   await chrome.storage.local.set({ collections, selectedCollectionId: created.id });
-  select.add(new Option(created.title, created.id));
-  select.value = created.id;
+  renderLibrarySelect(created.id);
   createLibraryForm.reset(); createLibraryForm.hidden = true;
   status.textContent = `Создана библиотека «${created.title}». Страницы будут добавляться сюда.`;
+});
+document.querySelector('#deleteAllLibraries').addEventListener('click', async () => {
+  const pageCount = collections.reduce((sum, library) => sum + library.items.filter(item => item.kind !== 'section').length, 0);
+  if (!confirm(`Удалить все ${collections.length} библиотек и ${pageCount} сохранённых страниц? Это действие нельзя отменить.`)) return;
+  collections = [];
+  await chrome.storage.local.set({ collections: [], selectedCollectionId: '' });
+  renderLibrarySelect('');
+  preview.hidden = true; addSelected.hidden = true;
+  status.textContent = 'Все библиотеки удалены. Создайте новую, чтобы продолжить.';
 });
 
 function normalizeUrl(value) {
