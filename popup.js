@@ -172,7 +172,7 @@ async function findSectionLinks() {
   status.textContent='Ищу соседние страницы в меню документации…';
   try {
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
-    const [result]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>{
+    const [injection]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>{
       const here=new URL(location.href), canonical=value=>{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;};
       const current=canonical(location.href), candidates=new Map();
       const titleOf=a=>(a.innerText||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
@@ -219,7 +219,8 @@ async function findSectionLinks() {
       }
       return [...candidates.values()].slice(0,30);
     }});
-    if(!result?.length){status.textContent='Не нашёл соседние страницы в меню или папке URL.';return;}
+    const result=injection?.result||[];
+    if(!result.length){status.textContent='На этой странице не удалось найти список ссылок меню. Проверьте, что открыта обычная страница документации и меню раздела загружено.';return;}
     candidatePages=new Map(result.map(item=>[item.url,item]));
     const context=result.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Группа страниц из меню сайта';
     document.querySelector('#sectionContext').textContent=context;
