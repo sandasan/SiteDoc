@@ -82,6 +82,7 @@ async function scanChunk(state){
     const items=new Map(state.items.map(item=>[canonical(item.url),{...item,url:canonical(item.url)}]));
     const queue=[...state.queue],visited=new Set(state.visited);let stopReason=state.stopReason||'',lastRequestAt=0;
     const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+    // Keep the crawl gentle even when a single page exposes many navigation links.
     const politeFetch=async url=>{if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));const response=await fetch(url,{credentials:'include'});lastRequestAt=Date.now();return response;};
     const titleOf=a=>(a.textContent||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
     for(let count=0;count<8&&queue.length&&visited.size<2000&&!stopReason;count++){
@@ -203,8 +204,10 @@ async function resumeTasks(){
 }
 
 function normTitle(value){return String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\.(html?|php|aspx?)$/i,'').replace(/[^a-z0-9]+/g,' ').trim();}
-function inferPath(data){const signals=[...(data.breadcrumbs||[]),...(data.navPath||[])].filter(item=>item?.title);const selected=signals.length?(data.breadcrumbs?.length>=data.navPath?.length?data.breadcrumbs:data.navPath):[];return selected.filter((item,index)=>index===0||normTitle(item.title)!==normTitle(selected[index-1].title));}
+function inferPath(data){const breadcrumbs=data.breadcrumbs||[],navPath=data.navPath||[];const signals=[...breadcrumbs,...navPath].filter(item=>item?.title);const selected=signals.length?(breadcrumbs.length>=navPath.length?breadcrumbs:navPath):[];return selected.filter((item,index)=>index===0||normTitle(item.title)!==normTitle(selected[index-1].title));}
 function savePage(collection,data,update){const url=canonical(data.url),duplicate=collection.items.find(item=>item.kind!=='section'&&canonical(item.url)===url);if(duplicate){if(!update)return'skipped';Object.assign(duplicate,data,{updatedAt:Date.now()});return'updated';}
+  // Build each breadcrumb level under its parent so identically named sections
+  // in different branches remain distinct while repeated imports reuse sections.
   let parentId=null;if(data.parentUrl){const parent=collection.items.find(item=>item.kind!=='section'&&canonical(item.url)===canonical(data.parentUrl));if(parent){parentId=parent.id;for(const title of data.parentSections||[]){let section=collection.items.find(item=>item.kind==='section'&&item.parentId===parentId&&normTitle(item.title)===normTitle(title));if(!section){section={id:crypto.randomUUID(),kind:'section',parentId,title,addedAt:Date.now()};collection.items.push(section);}parentId=section.id;}}}
   if(!parentId)for(const crumb of inferPath(data)){let section=collection.items.find(item=>item.kind==='section'&&item.parentId===parentId&&normTitle(item.title)===normTitle(crumb.title));if(!section){section={id:crypto.randomUUID(),kind:'section',parentId,title:crumb.title,url:crumb.url||'',addedAt:Date.now()};collection.items.push(section);}parentId=section.id;}
   collection.items.push({...data,hierarchyPath:inferPath(data).map(item=>item.title),id:crypto.randomUUID(),parentId,addedAt:Date.now()});return'added';}
