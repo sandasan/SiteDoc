@@ -34,6 +34,7 @@
 .popup .section-preview #sectionLinks{max-height:245px;overflow:auto;margin:2px 0 0}
 .popup .section-link{display:flex;align-items:center;gap:8px;padding:8px 2px;margin:0;border-bottom:1px solid #edf0ee;cursor:pointer}
 .popup .section-link.is-current{background:#f0f7f3}
+.popup .section-link.is-descendant{padding-left:calc(2px + var(--depth)*13px)}
 .popup .section-link input{flex:0 0 auto;margin:0}
 .section-copy{min-width:0;flex:1}
 .section-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:600}

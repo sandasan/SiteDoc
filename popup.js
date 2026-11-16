@@ -116,16 +116,18 @@ function inferHierarchy(data) {
   return result;
 }
 
+function findOrCreateSection(collection, title, parentId, url = '') {
+  const key=hierarchyKey(title);
+  let section=collection.items.find(item=>item.kind==='section'&&hierarchyKey(item.title)===key&&item.parentId===parentId);
+  if(!section){section={id:crypto.randomUUID(),kind:'section',parentId,title,url,addedAt:Date.now()};collection.items.push(section);}
+  return section;
+}
+
 function placeByBreadcrumbs(collection, data) {
   const crumbs = inferHierarchy(data);
   let parentId = null;
   for (const crumb of crumbs) {
-    const key=hierarchyKey(crumb.title);
-    let section = collection.items.find(item => item.kind === 'section' && hierarchyKey(item.title) === key && item.parentId === parentId);
-    if (!section) {
-      section = { id: crypto.randomUUID(), kind: 'section', parentId, title: crumb.title, url: crumb.url || '', addedAt: Date.now() };
-      collection.items.push(section);
-    }
+    const section=findOrCreateSection(collection,crumb.title,parentId,crumb.url||'');
     parentId = section.id;
   }
   return parentId;
@@ -142,7 +144,16 @@ function saveToCollection(collection, data, updateDuplicate = null) {
     return 'updated';
   }
   const hierarchyPath=inferHierarchy(data).map(x=>x.title);
-  const parentId = placeByBreadcrumbs(collection, data);
+  let parentId = null;
+  if(data.parentUrl){
+    const parentUrl=normalizeUrl(data.parentUrl);
+    const parentPage=collection.items.find(item=>item.kind!=='section'&&normalizeUrl(item.url)===parentUrl);
+    if(parentPage){
+      parentId=parentPage.id;
+      for(const sectionTitle of data.parentSections||[])parentId=findOrCreateSection(collection,sectionTitle,parentId).id;
+    }
+  }
+  if(!parentId)parentId=placeByBreadcrumbs(collection,data);
   collection.items.push({ ...data, hierarchyPath, id: crypto.randomUUID(), parentId, addedAt: Date.now() });
   return 'added';
 }
@@ -162,20 +173,23 @@ async function captureCurrent(tabId) {
       if (!nav) return [];
       return [...nav.querySelectorAll('a,[aria-current="page"]')].map(node => ({ title: (node.innerText || node.textContent || '').trim(), url: node.href || '' })).filter(x => x.title);
     })();
-    const navPath = (() => {
+    const menuHierarchy = (() => {
       const canonical=value=>{try{const url=new URL(value,location.href);url.hash='';return url.href.replace(/\/$/,'');}catch{return '';}};
+      const valid=a=>{try{const raw=a.getAttribute('href')||'';const url=new URL(a.href);return !raw.trim().startsWith('#')&&url.origin===location.origin;}catch{return false;}};
       const current=canonical(location.href), matches=[...document.querySelectorAll('a[href]')].filter(a=>canonical(a.href)===current);
-      let best=[];
+      let best={path:[],parentUrl:null,parentTitle:'',parentSections:[]};
       for(const anchor of matches){
         const li=anchor.closest('li');if(!li)continue;
-        const path=[];let node=li.parentElement?.closest('li');
+        const path=[],pendingSections=[];let parentUrl=null,parentTitle='',parentSections=[];let node=li.parentElement?.closest('li');
         while(node){
           const label=node.querySelector(':scope > a, :scope > label, :scope > span, :scope > div > a, :scope > div > span');
           const title=(label?.innerText||label?.textContent||'').trim().replace(/\s+/g,' ');
           if(title&&title.length<120)path.unshift({title,url:label.href||''});
+          if(!parentUrl&&label?.tagName==='A'&&valid(label)&&canonical(label.href)!==current){parentUrl=canonical(label.href);parentTitle=title;parentSections=pendingSections.slice().reverse();}
+          else if(!parentUrl&&title)pendingSections.push(title);
           node=node.parentElement?.closest('li');
         }
-        if(path.length>best.length)best=path;
+        if(path.length>best.path.length)best={path,parentUrl,parentTitle,parentSections};
       }
       return best;
     })();
@@ -199,7 +213,7 @@ async function captureCurrent(tabId) {
         styles.push({href:sheet.href||location.href,css});
       } catch { if(sheet.href)styles.push({href:sheet.href,css:`@import url("${sheet.href.replaceAll('"','%22')}");`}); }
     }
-    return {title:document.title,url:location.href,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath,styles,siteTitle:document.querySelector('meta[property="og:site_name"]')?.content||location.hostname};
+    return {title:document.title,url:location.href,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath:menuHierarchy.path,parentUrl:menuHierarchy.parentUrl,parentTitle:menuHierarchy.parentTitle,parentSections:menuHierarchy.parentSections,styles,siteTitle:document.querySelector('meta[property="og:site_name"]')?.content||location.hostname};
   }});
   return page.result;
 }
@@ -226,7 +240,7 @@ async function findSectionLinks() {
       const here=new URL(location.href), canonical=value=>{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;};
       const current=canonical(location.href), candidates=new Map();
       const titleOf=a=>(a.innerText||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
-      const valid=(a)=>{try{const u=new URL(a.href);return u.origin===here.origin&&!/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(u.pathname);}catch{return false;}};
+      const valid=(a)=>{try{const raw=a.getAttribute('href')||'';const u=new URL(a.href);return !raw.trim().startsWith('#')&&u.origin===here.origin&&!/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(u.pathname);}catch{return false;}};
       const currentLinks=[...document.querySelectorAll('a[href]')].filter(a=>valid(a)&&canonical(a.href)===current);
       const crumbNav=document.querySelector('[aria-label*="breadcrumb" i],.breadcrumb,.breadcrumbs');
       let pageCrumbs=crumbNav?[...crumbNav.querySelectorAll('a,[aria-current="page"]')].map(a=>({title:titleOf(a),url:a.href})).filter(x=>x.title):[];
@@ -242,20 +256,41 @@ async function findSectionLinks() {
         const primary=!!anchor.closest('.md-nav--primary,.md-sidebar--primary,.wy-nav-side,.wy-menu,[role="tree"]');
         const score=(active?100:0)+(primary?60:0)+(anchor.closest('.md-nav__list')?30:0)+Math.min(siblings.length,30);
         if(siblings.length&&score>(best?.score??-1)){
-          const ancestors=[];let node=li.parentElement?.closest('li');
+          const ancestors=[],pendingSections=[];let parentUrl=null,parentTitle='',parentSections=[];let node=li.parentElement?.closest('li');
           while(node){
             const label=node.querySelector(':scope > a, :scope > label, :scope > span, :scope > div > a, :scope > div > span');
             const text=(label?.innerText||label?.textContent||'').trim().replace(/\s+/g,' ');
             if(text&&text.length<120)ancestors.unshift({title:text,url:label.href||''});
+            if(!parentUrl&&label?.tagName==='A'&&valid(label)&&canonical(label.href)!==current){parentUrl=canonical(label.href);parentTitle=text;parentSections=pendingSections.slice().reverse();}
+            else if(!parentUrl&&text)pendingSections.push(text);
             node=node.parentElement?.closest('li');
           }
-          best={links:siblings,crumbs:ancestors,score};
+          best={links:siblings,crumbs:ancestors,score,list,parentUrl,parentTitle,parentSections};
         }
       }
-      const chosen=best?.links||[];
-      for(const {link} of chosen){
-        const url=canonical(link.href),title=titleOf(link);if(title.length>1)candidates.set(url,{url,title,breadcrumbs:best?.crumbs?.length?best.crumbs:pageCrumbs});
-      }
+      const basePath=(best?.crumbs?.length?best.crumbs:pageCrumbs).filter(crumb=>!best?.parentUrl||!crumb.url||canonical(crumb.url)!==best.parentUrl);
+      if(best?.parentTitle&&basePath[basePath.length-1]?.title===best.parentTitle)basePath.pop();
+      const scanList=(list,parentUrl=null,ancestorTitles=[],depth=0,parentTitle='',parentSections=[])=>{
+        for(const item of [...list.children].filter(child=>child.tagName==='LI')){
+          const link=[...item.querySelectorAll('a[href]')].find(a=>a.closest('ul,ol')===list&&valid(a));
+          let nextParent=parentUrl,nextTitles=ancestorTitles,nextDepth=depth,nextParentTitle=parentTitle,nextSections=parentSections;
+          if(link){
+            const url=canonical(link.href),title=titleOf(link);
+            if(title.length>1){
+              candidates.set(url,{url,title,breadcrumbs:basePath,navPath:[...basePath,...ancestorTitles.map(title=>({title,url:''}))],parentUrl,parentTitle,parentSections,depth});
+              nextParent=url;nextTitles=[...ancestorTitles,title];nextDepth=depth+1;nextParentTitle=title;nextSections=[];
+            }
+          }else{
+            const label=item.querySelector(':scope > label,:scope > span,:scope > div > span');
+            const sectionTitle=(label?.innerText||label?.textContent||'').trim().replace(/\s+/g,' ');
+            if(sectionTitle&&sectionTitle.length<120){nextTitles=[...ancestorTitles,sectionTitle];nextDepth=depth+1;nextSections=[...parentSections,sectionTitle];}
+          }
+          const nested=[...item.querySelectorAll('ul,ol')].filter(child=>child.closest('li')===item);
+          for(const childList of nested)scanList(childList,nextParent,nextTitles,nextDepth,nextParentTitle,nextSections);
+        }
+      };
+      if(best?.parentUrl)candidates.set(best.parentUrl,{url:best.parentUrl,title:best.parentTitle,breadcrumbs:basePath,navPath:basePath,parentUrl:null,parentTitle:'',parentSections:[],depth:0});
+      if(best?.list)scanList(best.list,best.parentUrl||null,best.parentTitle?[best.parentTitle]:[],best.parentUrl?1:0,best.parentTitle||'',best.parentSections||[]);
       // Fallback for sites without an explicit list-based navigation: use sibling URLs
       // from the current path directory, but keep this lower priority than the nav tree.
       if(!candidates.size){
@@ -263,11 +298,11 @@ async function findSectionLinks() {
         for(const a of document.querySelectorAll('a[href]')){
           if(!valid(a))continue;const url=canonical(a.href),u=new URL(url);
           if(url===current||!u.pathname.startsWith(directory))continue;
-          const title=titleOf(a);if(title.length>1&&!candidates.has(url))candidates.set(url,{url,title,breadcrumbs:pageCrumbs});
+          const title=titleOf(a);if(title.length>1&&!candidates.has(url))candidates.set(url,{url,title,breadcrumbs:pageCrumbs,navPath:pageCrumbs,parentUrl:null,parentTitle:'',parentSections:[],depth:0});
         }
       }
       const siblingCount=candidates.size;
-      if(!candidates.has(current))candidates.set(current,{url:current,title:document.title||titleOf(currentLinks[0])||here.pathname.split('/').filter(Boolean).pop()||here.hostname,breadcrumbs:best?.crumbs?.length?best.crumbs:pageCrumbs});
+      if(!candidates.has(current))candidates.set(current,{url:current,title:document.title||titleOf(currentLinks[0])||here.pathname.split('/').filter(Boolean).pop()||here.hostname,breadcrumbs:basePath,navPath:[...basePath,...(best?.parentTitle?[{title:best.parentTitle,url:best.parentUrl||''}]:[])],parentUrl:best?.parentUrl||null,parentTitle:best?.parentTitle||'',parentSections:best?.parentSections||[],depth:best?.parentUrl?1:0});
       return {items:[...candidates.values()],siblingCount};
     }});
     const result=injection?.result?.items||[];
@@ -279,7 +314,8 @@ async function findSectionLinks() {
     sectionList.innerHTML=result.map(item=>{
       const isCurrent=normalizeUrl(item.url)===normalizeUrl(tab.url);
       const path=new URL(item.url).pathname;
-      return `<label class="section-link ${isCurrent?'is-current':''}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>`;
+      const depth=Math.min(8,Math.max(0,Number(item.depth)||0));
+      return `<label class="section-link ${isCurrent?'is-current':''} ${depth?'is-descendant':''}" style="--depth:${depth}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>`;
     }).join('');
     selectAll.checked=true;selectAll.indeterminate=false;updateSelectionCount();
     preview.hidden=false; addSelected.hidden=false;
@@ -346,7 +382,7 @@ async function fetchSelectedPages() {
               styles.push({href,css});
             }catch{styles.push({href,css:`@import url("${href.replaceAll('"','%22')}");`});}
           }
-          output.push({title,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath:descriptor.breadcrumbs||[],styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname});
+          output.push({title,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath:descriptor.navPath||descriptor.breadcrumbs||[],parentUrl:descriptor.parentUrl||null,parentSections:descriptor.parentSections||[],styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname});
         }catch(error){output.push({url,error:error.message});}
       }
       return output;
