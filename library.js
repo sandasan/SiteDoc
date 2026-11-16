@@ -13,7 +13,12 @@ async function init() {
   selectedCollection = collections[0]?.id || ''; render();
 }
 function render() {
-  $('#collections').innerHTML = collections.map(c => `<option value="${c.id}" ${c.id === selectedCollection ? 'selected' : ''}>${esc(c.title)} (${c.items.length})</option>`).join('');
+  $('#collections').innerHTML = collections.length
+    ? collections.map(c => `<option value="${c.id}" ${c.id === selectedCollection ? 'selected' : ''}>${esc(c.title)} (${c.items.length})</option>`).join('')
+    : '<option value="">Нет коллекций — создайте новую</option>';
+  $('#collections').value = selectedCollection;
+  $('#renameCollection').disabled = !current();
+  $('#deleteCollection').disabled = !current();
   const list = items();
   $('#outline').innerHTML = list.map((p, i) => {
     let level = 0, parent = p.parentId;
@@ -106,6 +111,26 @@ function move(id, action) {
 }
 $('#collections').addEventListener('change', e => { selectedCollection = e.target.value; selectedPage = ''; selectedForDelete.clear(); render(); });
 $('#addCollection').addEventListener('click', async () => { const title = $('#newCollection').value.trim(); if (!title) return; const c = { id: crypto.randomUUID(), title, items: [] }; collections.push(c); selectedCollection = c.id; selectedPage = ''; $('#newCollection').value = ''; await persist(); render(); });
+$('#renameCollection').addEventListener('click', async () => {
+  const collection = current(); if (!collection) return;
+  const title = prompt('Новое название коллекции:', collection.title)?.trim();
+  if (!title || title === collection.title) return;
+  const duplicate = collections.find(item => item.id !== collection.id && item.title.trim().toLocaleLowerCase() === title.toLocaleLowerCase());
+  if (duplicate) { alert(`Коллекция «${duplicate.title}» уже существует.`); return; }
+  collection.title = title;
+  await persist(); render();
+});
+$('#deleteCollection').addEventListener('click', async () => {
+  const collection = current(); if (!collection) return;
+  const pageCount = collection.items.filter(item => item.kind !== 'section').length;
+  const detail = pageCount ? ` вместе с ${pageCount} сохранёнными страницами` : ' (она пуста)';
+  if (!confirm(`Удалить коллекцию «${collection.title}»${detail}? Это действие нельзя отменить.`)) return;
+  const index = collections.findIndex(item => item.id === collection.id);
+  collections = collections.filter(item => item.id !== collection.id);
+  selectedCollection = collections[Math.min(index, collections.length - 1)]?.id || '';
+  selectedPage = ''; selectedForDelete.clear();
+  await persist(); render();
+});
 $('#selectAllPages').addEventListener('change', e => {
   const pageItems = items().filter(item => item.kind !== 'section');
   selectedForDelete.clear();

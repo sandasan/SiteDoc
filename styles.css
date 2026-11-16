@@ -80,3 +80,7 @@
 .bulk-actions button:disabled{opacity:.5;cursor:not-allowed}
 .outline-item .page-selector{flex:0 0 auto;width:auto;margin:0 2px 0 0}
 .outline-item .tree-title{min-width:0}
+.collection-manage{display:flex;gap:7px;margin-top:7px}
+.collection-manage button{flex:1;padding:7px 8px;border:1px solid var(--line);border-radius:7px;background:#f9fbf9;color:#42534b;font-size:11px}
+.collection-manage button.danger{border-color:#eed0ce;background:#fff7f6;color:#9e3b38}
+.collection-manage button:disabled{opacity:.5;cursor:not-allowed}
