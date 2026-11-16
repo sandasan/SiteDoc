@@ -266,21 +266,41 @@ async function captureCurrent(tabId) {
     })();
     let embeddedBytes = 0;
     const toDataUrl = async source => {
-      const response = await fetch(source, { credentials: 'include' }); if (!response.ok) return null;
-      const blob = await response.blob(); if (embeddedBytes + blob.size > 2_000_000) return null; embeddedBytes += blob.size;
-      return await new Promise(resolve => { const reader=new FileReader(); reader.onload=()=>resolve(reader.result); reader.onerror=()=>resolve(null); reader.readAsDataURL(blob); });
+      try {
+        const response = await fetch(source, { credentials: 'include', signal: AbortSignal.timeout(12000) });
+        if (!response.ok) return null;
+        const declaredSize = Number(response.headers.get('content-length'));
+        if (Number.isFinite(declaredSize) && declaredSize > 500_000) return null;
+        let blob;
+        if (response.body?.getReader) {
+          const reader = response.body.getReader(), chunks = []; let size = 0;
+          while (true) {
+            const {done, value} = await reader.read(); if (done) break;
+            size += value.byteLength;
+            if (size > 500_000 || embeddedBytes + size > 2_000_000) { await reader.cancel(); return null; }
+            chunks.push(value);
+          }
+          blob = new Blob(chunks, {type: response.headers.get('content-type') || 'application/octet-stream'});
+        } else blob = await response.blob();
+        if (blob.size > 500_000 || embeddedBytes + blob.size > 2_000_000) return null;
+        embeddedBytes += blob.size;
+        return await new Promise(resolve => { const reader=new FileReader(); reader.onload=()=>resolve(reader.result); reader.onerror=()=>resolve(null); reader.readAsDataURL(blob); });
+      } catch { return null; }
     };
-    await Promise.all([...copy.querySelectorAll('img')].map(async image => {
+    // Bound both work count and parallel requests; real pages can contain thousands of lazy images.
+    const images = [...copy.querySelectorAll('img')].slice(0, 40);
+    for (let start = 0; start < images.length; start += 4) await Promise.all(images.slice(start, start + 4).map(async image => {
       const raw=image.currentSrc || image.getAttribute('src') || image.getAttribute('data-src'); if(!raw)return;
       const source=new URL(raw,location.href).href; image.setAttribute('src',source); image.removeAttribute('srcset');
-      try { const data=await toDataUrl(source); if(data)image.setAttribute('src',data); } catch {}
+      const data=await toDataUrl(source); if(data)image.setAttribute('src',data);
     }));
     const styles=[];
-    for(const sheet of document.styleSheets){
+    let cssResources = 0;
+    for(const sheet of [...document.styleSheets].slice(0, 10)){
       try {
-        let css=[...sheet.cssRules].map(rule=>rule.cssText).join('\n');
-        const urls=[...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/gi)].map(m=>m[1]).filter(u=>!u.startsWith('data:')&&!u.startsWith('#')))];
-        for(const source of urls){try{const absolute=new URL(source,sheet.href||location.href).href;const data=await toDataUrl(absolute);css=css.split(source).join(data||absolute);}catch{}}
+        let css=[...sheet.cssRules].slice(0, 500).map(rule=>rule.cssText).join('\n').slice(0, 300_000);
+        const urls=[...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/gi)].map(m=>m[1]).filter(u=>!u.startsWith('data:')&&!u.startsWith('#')&&!/\.(?:woff2?|ttf|otf)(?:[?#]|$)/i.test(u)))].slice(0, Math.max(0, 20-cssResources));
+        for(const source of urls){cssResources++;try{const absolute=new URL(source,sheet.href||location.href).href;const data=await toDataUrl(absolute);css=css.split(source).join(data||absolute);}catch{}}
         styles.push({href:sheet.href||location.href,css});
       } catch { if(sheet.href)styles.push({href:sheet.href,css:`@import url("${sheet.href.replaceAll('"','%22')}");`}); }
     }
