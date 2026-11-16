@@ -17,7 +17,7 @@ function render() {
     let level = 0, parent = p.parentId;
     while (parent && level < 3) { level++; parent = list.find(x => x.id === parent)?.parentId; }
     level = Math.min(3, level);
-    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${p.id}"><span class="tree-title" title="${esc(p.url)}">${esc(p.title)}</span><button class="icon-button" data-act="up" title="Вверх">↑</button><button class="icon-button" data-act="down" title="Вниз">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущую">↳</button></div></li>`;
+    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${esc(p.id)}"><span class="tree-title" title="${esc(p.url || p.title)}">${p.kind === 'section' ? '▸ ' : ''}${esc(p.title)}</span><button class="icon-button" data-act="up" title="Вверх">↑</button><button class="icon-button" data-act="down" title="Вниз">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущую">↳</button></div></li>`;
   }).join('') || '<li class="empty small">В этой коллекции пока нет страниц. Откройте страницу и добавьте её через значок расширения.</li>';
   $('#outline').querySelectorAll('.outline-item').forEach(row => row.addEventListener('click', e => {
     const id = row.dataset.id, act = e.target.dataset.act;
@@ -25,13 +25,23 @@ function render() {
   }));
   const p = list.find(x => x.id === selectedPage);
   $('#empty').hidden = !!p; $('#page').hidden = !p;
-  if (p) { $('#title').value = p.title; $('#url').value = p.url; $('#content').textContent = p.text || '(Текст на этой странице не найден.)'; }
+  if (p) {
+    $('#editorHeading').textContent = p.kind === 'section' ? 'Раздел' : 'Страница';
+    $('#title').value = p.title; $('#url').value = p.url || '';
+    $('#url').hidden = p.kind === 'section';
+    $('#content').textContent = p.kind === 'section' ? 'Раздел в оглавлении. Страницы с такими же хлебными крошками будут добавляться сюда автоматически.' : (p.text || '(Текст на этой странице не найден.)');
+  }
 }
 function move(id, action) {
   const a = items(), i = a.findIndex(p => p.id === id); if (i < 0) return;
   if (action === 'up' && i > 0) [a[i-1], a[i]] = [a[i], a[i-1]];
   if (action === 'down' && i < a.length-1) [a[i+1], a[i]] = [a[i], a[i+1]];
-  if (action === 'indent' && i > 0) a[i].parentId = a[i-1].id;
+  if (action === 'indent' && i > 0) {
+    const proposedParent = a[i-1];
+    let ancestor = proposedParent, createsCycle = ancestor.id === id;
+    while (ancestor.parentId && !createsCycle) { ancestor = a.find(item => item.id === ancestor.parentId); createsCycle = ancestor?.id === id; if (!ancestor) break; }
+    if (!createsCycle) a[i].parentId = proposedParent.id;
+  }
   persist().then(render);
 }
 $('#collections').addEventListener('change', e => { selectedCollection = e.target.value; selectedPage = ''; render(); });
@@ -40,14 +50,17 @@ $('#title').addEventListener('change', async e => { const p = items().find(x => 
 $('#url').addEventListener('change', async e => { const p = items().find(x => x.id === selectedPage); if (p) { p.url = e.target.value; await persist(); } });
 $('#up').onclick = () => move(selectedPage, 'up'); $('#down').onclick = () => move(selectedPage, 'down'); $('#indent').onclick = () => move(selectedPage, 'indent');
 $('#outdent').onclick = async () => { const p = items().find(x => x.id === selectedPage); if (p) { p.parentId = null; await persist(); render(); } };
-$('#delete').onclick = async () => { const c = current(); c.items = c.items.filter(p => p.id !== selectedPage && p.parentId !== selectedPage); selectedPage = ''; await persist(); render(); };
+$('#delete').onclick = async () => { const c = current(), remove = new Set([selectedPage]); let changed = true; while (changed) { changed = false; for (const p of c.items) if (remove.has(p.parentId) && !remove.has(p.id)) { remove.add(p.id); changed = true; } } c.items = c.items.filter(p => !remove.has(p.id)); selectedPage = ''; await persist(); render(); };
 $('#exportPdf').onclick = () => { const c = current(); if (!c?.items.length) return; const w = window.open('', '_blank'); w.document.write(printDocument(c)); w.document.close(); w.focus(); setTimeout(() => w.print(), 500); };
 function printDocument(c) {
+  const pages = c.items.filter(p => p.kind !== 'section');
   const nestedContents = parent => c.items.filter(p => (p.parentId || null) === parent).map(p => {
-    const i = c.items.indexOf(p), sub = nestedContents(p.id);
+    const sub = nestedContents(p.id);
+    if (p.kind === 'section') return `<li>${esc(p.title)}${sub ? `<ol>${sub}</ol>` : ''}</li>`;
+    const i = pages.indexOf(p);
     return `<li><a href="#page-${i}">${esc(p.title)}</a>${sub ? `<ol>${sub}</ol>` : ''}<ul>${(p.headings || []).filter(h => h.title).map(h => `<li><a href="#page-${i}-${encodeURIComponent(h.id)}">${esc(h.title)}</a></li>`).join('')}</ul></li>`;
   }).join('');
-  const rows = c.items.map((p,i) => {
+  const rows = pages.map((p,i) => {
     const body = p.html || `<pre>${esc(p.text || '')}</pre>`;
     const css = (p.styles || []).map(s => s.css).filter(Boolean).join('\n').replace(/<\/style/gi,'<\\/style');
     return `<article id="page-${i}"><h1>${esc(p.title)}</h1><p class="source"><a href="${esc(p.url)}">${esc(p.url)}</a></p><style>${css}</style><main>${body}</main></article>`;
@@ -60,16 +73,23 @@ const crcTable = (() => { const t = new Uint32Array(256); for (let n=0;n<256;n++
 function crc32(bytes){let c=0xffffffff;for(const b of bytes)c=crcTable[(c^b)&255]^(c>>>8);return (c^0xffffffff)>>>0;}
 function zip(files){const enc=new TextEncoder(), local=[], central=[];let offset=0;for(const f of files){const name=enc.encode(f.name),data=typeof f.data==='string'?enc.encode(f.data):f.data,crc=crc32(data),lh=new Uint8Array(30+name.length),lv=new DataView(lh.buffer);lv.setUint32(0,0x04034b50,true);lv.setUint16(4,20,true);lv.setUint32(14,crc,true);lv.setUint32(18,data.length,true);lv.setUint32(22,data.length,true);lv.setUint16(26,name.length,true);lh.set(name,30);local.push(lh,data);const ch=new Uint8Array(46+name.length),cv=new DataView(ch.buffer);cv.setUint32(0,0x02014b50,true);cv.setUint16(4,20,true);cv.setUint16(6,20,true);cv.setUint32(16,crc,true);cv.setUint32(20,data.length,true);cv.setUint32(24,data.length,true);cv.setUint16(28,name.length,true);cv.setUint32(42,offset,true);ch.set(name,46);central.push(ch);offset+=lh.length+data.length;}const centralSize=central.reduce((n,x)=>n+x.length,0),end=new Uint8Array(22),v=new DataView(end.buffer);v.setUint32(0,0x06054b50,true);v.setUint16(8,files.length,true);v.setUint16(10,files.length,true);v.setUint32(12,centralSize,true);v.setUint32(16,offset,true);return new Blob([...local,...central,end],{type:'application/epub+zip'});}
 function epub(c){
-  const uid=crypto.randomUUID(), enc=s=>esc(s), list=c.items;
-  const manifest=list.map((p,i)=>`<item id="p${i}" href="p${i}.xhtml" media-type="application/xhtml+xml"/>`).join('');
-  const spine=list.map((p,i)=>`<itemref idref="p${i}"/>`).join('');
+  const uid=crypto.randomUUID(), enc=s=>esc(s), list=c.items, pages=list.filter(p=>p.kind!=='section');
+  const manifest=pages.map((p,i)=>`<item id="p${i}" href="p${i}.xhtml" media-type="application/xhtml+xml"/>`).join('');
+  const spine=pages.map((p,i)=>`<itemref idref="p${i}"/>`).join('');
   const children=parent=>list.filter(p=>(p.parentId||null)===parent);
-  const navTree=parent=>children(parent).map(p=>{const i=list.indexOf(p), nested=navTree(p.id), headings=(p.headings||[]).filter(h=>h.title).map(h=>`<li><a href="p${i}.xhtml#${enc(h.id)}">${enc(h.title)}</a></li>`).join('');return `<li><a href="p${i}.xhtml">${enc(p.title)}</a>${nested||headings?`<ol>${headings}${nested}</ol>`:''}</li>`;}).join('');
+  const firstPage=p=>p.kind!=='section'?pages.indexOf(p):children(p.id).map(firstPage).find(i=>i>=0)??-1;
+  const navTree=parent=>children(parent).map(p=>{
+    const i=firstPage(p), nested=navTree(p.id);
+    if(i<0)return '';
+    const headingToc=p.kind==='section'?'':(p.headings||[]).filter(h=>h.title).map(h=>`<li><a href="p${i}.xhtml#${enc(h.id)}">${enc(h.title)}</a></li>`).join('');
+    const childContent=`${headingToc}${nested}`;
+    return `<li><a href="p${i}.xhtml">${enc(p.title)}</a>${childContent?`<ol>${childContent}</ol>`:''}</li>`;
+  }).join('');
   const files=[
     {name:'mimetype',data:'application/epub+zip'},
     {name:'META-INF/container.xml',data:'<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'},
     {name:'OEBPS/nav.xhtml',data:`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>${enc(c.title)}</title></head><body><nav epub:type="toc"><h1>${enc(c.title)}</h1><ol>${navTree(null)}</ol></nav></body></html>`},
-    ...list.map((p,i)=>{
+    ...pages.map((p,i)=>{
       const assets=[];
       const localizeDataImages=source=>source.replace(/data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)/gi,(match,mime,b64)=>{
         const ext=({ 'image/jpeg':'jpg','image/svg+xml':'svg' })[mime.toLowerCase()]||mime.split('/')[1].split('+')[0];

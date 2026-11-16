@@ -1,6 +1,10 @@
 const select = document.querySelector('#collection');
 const status = document.querySelector('#status');
-const read = (keys) => chrome.storage.local.get(keys);
+const preview = document.querySelector('#sectionPreview');
+const sectionList = document.querySelector('#sectionLinks');
+const addSelected = document.querySelector('#addSelected');
+const read = keys => chrome.storage.local.get(keys);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function init() {
   const { collections = [] } = await read(['collections']);
@@ -8,79 +12,191 @@ async function init() {
     const first = { id: crypto.randomUUID(), title: 'Моя библиотека', items: [] };
     await chrome.storage.local.set({ collections: [first] }); collections.push(first);
   }
-  select.innerHTML = collections.map(c => `<option value="${c.id}">${escapeHtml(c.title)}</option>`).join('');
+  select.innerHTML = collections.map(c => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join('');
 }
-function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-document.querySelector('#save').addEventListener('click', async () => {
+function normalizeUrl(value) {
+  const url = new URL(value);
+  url.hash = '';
+  if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, '');
+  return url.href;
+}
+
+function placeByBreadcrumbs(collection, data) {
+  const crumbs = (data.breadcrumbs || []).filter(x => x && x.title && x.title.toLowerCase() !== 'home');
+  if (crumbs.length && crumbs[crumbs.length - 1].title.toLowerCase() === data.title.toLowerCase()) crumbs.pop();
+  let parentId = null;
+  for (const crumb of crumbs) {
+    let section = collection.items.find(item => item.kind === 'section' && item.title.toLowerCase() === crumb.title.toLowerCase() && item.parentId === parentId);
+    if (!section) {
+      section = { id: crypto.randomUUID(), kind: 'section', parentId, title: crumb.title, url: crumb.url || '', addedAt: Date.now() };
+      collection.items.push(section);
+    }
+    parentId = section.id;
+  }
+  return parentId;
+}
+
+function saveToCollection(collection, data, updateDuplicate = null) {
+  const canonical = normalizeUrl(data.url);
+  const duplicate = collection.items.find(item => item.kind !== 'section' && normalizeUrl(item.url) === canonical);
+  if (duplicate) {
+    const shouldUpdate = updateDuplicate === null ? confirm(`Эта страница уже есть в коллекции:\n${duplicate.title}\n\nОбновить сохранённую копию?`) : updateDuplicate;
+    if (!shouldUpdate) return 'skipped';
+    const { id, parentId, addedAt, ...rest } = data;
+    Object.assign(duplicate, rest, { updatedAt: Date.now() });
+    return 'updated';
+  }
+  const parentId = placeByBreadcrumbs(collection, data);
+  collection.items.push({ ...data, id: crypto.randomUUID(), parentId, addedAt: Date.now() });
+  return 'added';
+}
+
+async function captureCurrent(tabId) {
+  const [page] = await chrome.scripting.executeScript({ target: { tabId }, func: async () => {
+    const root = document.querySelector('main, article, [role="main"]') || document.body;
+    const copy = root.cloneNode(true);
+    copy.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,button,[role="navigation"],.advertisement,.ads').forEach(n => n.remove());
+    const usedIds = new Set([...copy.querySelectorAll('[id]')].map(node => node.id));
+    const headings = [...copy.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((heading, index) => {
+      if (!heading.id) { const base=`sitedoc-heading-${index+1}`; let id=base, suffix=1; while(usedIds.has(id)) id=`${base}-${++suffix}`; heading.id=id; usedIds.add(id); }
+      return { id: heading.id, title: (heading.innerText || heading.textContent || '').trim(), level: Number(heading.tagName.slice(1)) };
+    }).filter(x => x.title);
+    const breadcrumbs = (() => {
+      const nav = document.querySelector('[aria-label*="breadcrumb" i], .breadcrumb, .breadcrumbs, nav[aria-label*="path" i]');
+      if (!nav) return [];
+      return [...nav.querySelectorAll('a,[aria-current="page"]')].map(node => ({ title: (node.innerText || node.textContent || '').trim(), url: node.href || '' })).filter(x => x.title);
+    })();
+    let embeddedBytes = 0;
+    const toDataUrl = async source => {
+      const response = await fetch(source, { credentials: 'include' }); if (!response.ok) return null;
+      const blob = await response.blob(); if (embeddedBytes + blob.size > 2_000_000) return null; embeddedBytes += blob.size;
+      return await new Promise(resolve => { const reader=new FileReader(); reader.onload=()=>resolve(reader.result); reader.onerror=()=>resolve(null); reader.readAsDataURL(blob); });
+    };
+    await Promise.all([...copy.querySelectorAll('img')].map(async image => {
+      const raw=image.currentSrc || image.getAttribute('src') || image.getAttribute('data-src'); if(!raw)return;
+      const source=new URL(raw,location.href).href; image.setAttribute('src',source); image.removeAttribute('srcset');
+      try { const data=await toDataUrl(source); if(data)image.setAttribute('src',data); } catch {}
+    }));
+    const styles=[];
+    for(const sheet of document.styleSheets){
+      try {
+        let css=[...sheet.cssRules].map(rule=>rule.cssText).join('\n');
+        const urls=[...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/gi)].map(m=>m[1]).filter(u=>!u.startsWith('data:')&&!u.startsWith('#')))];
+        for(const source of urls){try{const absolute=new URL(source,sheet.href||location.href).href;const data=await toDataUrl(absolute);css=css.split(source).join(data||absolute);}catch{}}
+        styles.push({href:sheet.href||location.href,css});
+      } catch { if(sheet.href)styles.push({href:sheet.href,css:`@import url("${sheet.href.replaceAll('"','%22')}");`}); }
+    }
+    return {title:document.title,url:location.href,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,styles,siteTitle:document.querySelector('meta[property="og:site_name"]')?.content||location.hostname};
+  }});
+  return page.result;
+}
+
+async function saveCurrent() {
   status.textContent = 'Сохраняю страницу…';
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
-    const [page] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: async () => {
-      const root = document.querySelector('main, article, [role="main"]') || document.body;
-      const copy = root.cloneNode(true);
-      copy.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,button,[role="navigation"],.advertisement,.ads').forEach(n => n.remove());
-      const usedIds = new Set([...copy.querySelectorAll('[id]')].map(node => node.id));
-      const headings = [...copy.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((heading, index) => {
-        if (!heading.id) {
-          const base = `sitedoc-heading-${index + 1}`;
-          let id = base, suffix = 1;
-          while (usedIds.has(id)) id = `${base}-${++suffix}`;
-          heading.id = id; usedIds.add(id);
-        }
-        return { id: heading.id, title: (heading.innerText || heading.textContent || '').trim(), level: Number(heading.tagName.slice(1)) };
-      }).filter(heading => heading.title);
+    const [tab] = await chrome.tabs.query({active:true,currentWindow:true});
+    const data = await captureCurrent(tab.id);
+    const {collections=[]} = await read(['collections']);
+    const collection=collections.find(c=>c.id===select.value); if(!collection)throw new Error('Коллекция не найдена');
+    const result=saveToCollection(collection,data);
+    if(result==='skipped'){status.textContent='Оставил сохранённую копию без изменений.';return;}
+    await chrome.storage.local.set({collections});
+    status.textContent = result==='updated' ? `Обновлено: ${data.title}` : `Добавлено: ${data.title}`;
+  } catch(e) { status.textContent=`Не удалось сохранить страницу: ${e.message}`; }
+}
 
-      // Inline images so EPUB reading does not depend on the source site remaining online.
-      let embeddedBytes = 0;
-      const toDataUrl = async source => {
-        const response = await fetch(source, { credentials: 'include' });
-        if (!response.ok) return null;
-        const blob = await response.blob();
-        if (embeddedBytes + blob.size > 2_000_000) return null;
-        embeddedBytes += blob.size;
-        return await new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => resolve(null); reader.readAsDataURL(blob); });
-      };
-      await Promise.all([...copy.querySelectorAll('img')].map(async image => {
-        const rawSource = image.currentSrc || image.getAttribute('src') || image.getAttribute('data-src');
-        if (!rawSource) return;
-        const source = new URL(rawSource, location.href).href;
-        image.setAttribute('src', source);
-        image.removeAttribute('srcset');
-        try { const data = await toDataUrl(source); if (data) image.setAttribute('src', data); }
-        catch { /* Cross-origin images that disallow fetching stay as source URLs. */ }
-      }));
-
-      // CSSOM exposes rules for same-origin and CORS-enabled stylesheets. Keep source URLs
-      // for inaccessible stylesheets as graceful online fallbacks.
-      const styles = [];
-      for (const sheet of document.styleSheets) {
-        try {
-          let css = [...sheet.cssRules].map(rule => rule.cssText).join('\n');
-          const imageUrls = [...new Set([...css.matchAll(/url\([\"']?([^\"')]+)[\"']?\)/gi)].map(match => match[1]).filter(url => !url.startsWith('data:') && !url.startsWith('#')))];
-          for (const source of imageUrls) {
-            try {
-              const absolute = new URL(source, sheet.href || location.href).href;
-              const data = await toDataUrl(absolute);
-              if (data) css = css.split(source).join(data);
-              else css = css.split(source).join(absolute);
-            } catch { /* Keep unresolved CSS asset references absolute. */ }
-          }
-          styles.push({ href: sheet.href || location.href, css });
-        } catch {
-          if (sheet.href) styles.push({ href: sheet.href, css: `@import url("${sheet.href.replaceAll('"', '%22')}");` });
-        }
+async function findSectionLinks() {
+  status.textContent='Ищу страницы в текущем разделе…';
+  try {
+    const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+    const [result]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>{
+      const here=new URL(location.href);
+      const directory=here.pathname.slice(0,here.pathname.lastIndexOf('/')+1);
+      const candidates=new Map();
+      for(const a of document.querySelectorAll('a[href]')){
+        try{
+          const url=new URL(a.href); if(url.origin!==here.origin)continue; url.hash='';
+          if(url.pathname===here.pathname||!url.pathname.startsWith(directory))continue;
+          if(/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(url.pathname))continue;
+          const title=(a.innerText||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
+          if(title.length<2)continue;
+          const key=url.href.replace(/\/$/,''); if(!candidates.has(key))candidates.set(key,{url:key,title});
+        }catch{}
       }
-      return { title: document.title, url: location.href, html: copy.innerHTML, text: copy.innerText || copy.textContent || '', headings, styles, siteTitle: document.querySelector('meta[property="og:site_name"]')?.content || location.hostname };
-    } });
-    const data = page.result;
-    const { collections = [] } = await read(['collections']);
-    const collection = collections.find(c => c.id === select.value);
-    if (!collection) throw new Error('Коллекция не найдена');
-    const id = crypto.randomUUID();
-    collection.items.push({ id, parentId: null, title: data.title || data.url, url: data.url, siteTitle: data.siteTitle, html: data.html, text: data.text, headings: data.headings || [], styles: data.styles || [], addedAt: Date.now() });
-    await chrome.storage.local.set({ collections });
-    status.textContent = `Добавлено: ${data.title}`;
-  } catch (e) { status.textContent = `Не удалось сохранить страницу: ${e.message}`; }
-});
+      return [...candidates.values()].slice(0,30);
+    }});
+    if(!result?.length){status.textContent='Не нашёл ссылок в папке этой страницы.';return;}
+    sectionList.innerHTML=result.map((item,i)=>`<label class="section-link"><input type="checkbox" value="${esc(item.url)}" checked><span>${esc(item.title)}<small>${esc(item.url)}</small></span></label>`).join('');
+    preview.hidden=false; addSelected.hidden=false;
+    status.textContent=`Найдено страниц: ${result.length} (максимум 30). Проверьте список перед добавлением.`;
+  }catch(e){status.textContent=`Не удалось прочитать раздел: ${e.message}`;}
+}
+
+async function fetchSelectedPages() {
+  const urls=[...sectionList.querySelectorAll('input:checked')].map(input=>input.value).slice(0,30);
+  if(!urls.length){status.textContent='Выберите хотя бы одну страницу.';return;}
+  status.textContent=`Загружаю выбранные страницы (0/${urls.length})…`;
+  addSelected.disabled=true;
+  try{
+    const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+    const [result]=await chrome.scripting.executeScript({target:{tabId:tab.id},args:[urls],func:async urls=>{
+      const output=[];
+      for(const url of urls){
+        try{
+          const response=await fetch(url,{credentials:'include'}); if(!response.ok)throw new Error(`HTTP ${response.status}`);
+          const source=await response.text(), doc=new DOMParser().parseFromString(source,'text/html');
+          const root=doc.querySelector('main,article,[role="main"]')||doc.body;
+          const copy=root.cloneNode(true); copy.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,button,[role="navigation"]').forEach(n=>n.remove());
+          let assetBytes=0;
+          const dataUrl=async source=>{
+            try{
+              const response=await fetch(source,{credentials:'include'});if(!response.ok)return null;
+              const blob=await response.blob();if(assetBytes+blob.size>2_000_000)return null;assetBytes+=blob.size;
+              return await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>resolve(null);reader.readAsDataURL(blob);});
+            }catch{return null;}
+          };
+          await Promise.all([...copy.querySelectorAll('img')].map(async image=>{
+            const raw=image.getAttribute('src')||image.getAttribute('data-src')||image.getAttribute('data-original');if(!raw)return;
+            const absolute=new URL(raw,url).href;image.setAttribute('src',absolute);image.removeAttribute('srcset');
+            const embedded=await dataUrl(absolute);if(embedded)image.setAttribute('src',embedded);
+          }));
+          const headings=[...copy.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((h,i)=>{if(!h.id)h.id=`sitedoc-heading-${i+1}`;return{id:h.id,title:(h.textContent||'').trim(),level:Number(h.tagName.slice(1))};}).filter(h=>h.title);
+          const crumbs=doc.querySelector('[aria-label*="breadcrumb" i],.breadcrumb,.breadcrumbs');
+          const breadcrumbs=crumbs?[...crumbs.querySelectorAll('a,[aria-current="page"]')].map(a=>({title:(a.textContent||'').trim(),url:a.href})).filter(x=>x.title):[];
+          const title=doc.title||(headings[0]?.title)||url;
+          const styleLinks=[...doc.querySelectorAll('link[rel="stylesheet"][href]')].slice(0,10);
+          const styles=[...doc.querySelectorAll('style')].map(style=>({href:url,css:style.textContent||''}));
+          for(const link of styleLinks){
+            const href=new URL(link.getAttribute('href'),url).href;
+            try{
+              const response=await fetch(href,{credentials:'include'});if(!response.ok)throw new Error('stylesheet fetch failed');
+              let css=(await response.text()).slice(0,300_000);
+              const resources=[...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/gi)].map(m=>m[1]).filter(src=>!src.startsWith('data:')&&!src.startsWith('#')))];
+              for(const src of resources){const absolute=new URL(src,href).href;const embedded=await dataUrl(absolute);css=css.split(src).join(embedded||absolute);}
+              styles.push({href,css});
+            }catch{styles.push({href,css:`@import url("${href.replaceAll('"','%22')}");`});}
+          }
+          output.push({title,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname});
+        }catch(error){output.push({url,error:error.message});}
+      }
+      return output;
+    }});
+    const pages=result.result||[], {collections=[]}=await read(['collections']);
+    const collection=collections.find(c=>c.id===select.value);let added=0,updated=0,failed=0;
+    const canonical=url=>{try{const u=new URL(url);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return url;}};
+    const incomingDuplicates=pages.filter(page=>!page.error&&collection.items.some(item=>item.kind!=='section'&&canonical(item.url)===canonical(page.url))).length;
+    const updateExisting=incomingDuplicates?confirm(`В коллекции уже сохранено страниц из списка: ${incomingDuplicates}. Обновить эти копии?`):false;
+    for(const page of pages){if(page.error){failed++;continue;}const outcome=saveToCollection(collection,page,updateExisting);if(outcome==='added')added++;else if(outcome==='updated')updated++;}
+    await chrome.storage.local.set({collections});
+    preview.hidden=true;addSelected.hidden=true;
+    status.textContent=`Готово: добавлено ${added}, обновлено ${updated}${failed?`, ошибок ${failed}`:''}.`;
+  }catch(e){status.textContent=`Ошибка сбора раздела: ${e.message}`;}
+  finally{addSelected.disabled=false;}
+}
+
+document.querySelector('#save').addEventListener('click',saveCurrent);
+document.querySelector('#findSection').addEventListener('click',findSectionLinks);
+addSelected.addEventListener('click',fetchSelectedPages);
+document.querySelector('#selectAll').addEventListener('change',e=>sectionList.querySelectorAll('input[type=checkbox]').forEach(x=>x.checked=e.target.checked));
 init();
