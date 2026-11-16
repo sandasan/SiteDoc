@@ -1,3 +1,4 @@
+if(typeof importScripts==='function')importScripts('store.js');
 const RESUME_ALARM='sitedoc-task-resume';
 let scanRunning=false;
 let importRunning=false;
@@ -62,7 +63,8 @@ async function processScan(){
       const saved=await chrome.storage.local.get(['scanProgress','activeJob']);
       const state=saved.scanProgress,job=saved.activeJob;
       if(!state||job?.type!=='scan')break;
-      if(!state.queue.length||state.visited.length>=2000||state.stopReason){
+      if(state.retryAt&&state.retryAt>Date.now()){await chrome.alarms.create(RESUME_ALARM,{when:state.retryAt});break;}
+      if(!state.queue.length||state.stopReason){
         await chrome.storage.local.set({sectionCandidates:state.items,activeJob:{...job,phase:'complete',done:state.visited.length,total:state.visited.length,stopReason:state.stopReason||'',finishedAt:Date.now()}});
         await chrome.storage.local.remove('scanProgress');break;
       }
@@ -85,11 +87,17 @@ async function scanChunk(state){
     // Keep the crawl gentle even when a single page exposes many navigation links.
     const politeFetch=async url=>{if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));const response=await fetch(url,{credentials:'include'});lastRequestAt=Date.now();return response;};
     const titleOf=a=>(a.textContent||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
-    for(let count=0;count<8&&queue.length&&visited.size<2000&&!stopReason;count++){
+    for(let count=0;count<8&&queue.length&&!stopReason;count++){
       const parent=queue.shift(),key=canonical(parent.url);if(visited.has(key))continue;visited.add(key);
       try{
         const response=await politeFetch(key);
-        if([401,403,429,503].includes(response.status)){stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;break;}
+        if(response.status>=500||[408,425,429].includes(response.status)){
+          const retryAfter=response.headers.get('Retry-After');
+          const wait=retryAfter?( /^\d+$/.test(retryAfter)?Number(retryAfter)*1000:Math.max(0,Date.parse(retryAfter)-Date.now()) ):Math.min(60*60*1000,5*60*1000*2**Math.min(Number(state.retryCount)||0,4));
+          queue.unshift(parent);visited.delete(key);
+          return{...state,items:[...items.values()],queue,visited:[...visited],retryCount:(Number(state.retryCount)||0)+1,retryAt:Date.now()+Math.max(60*1000,wait),stopReason:''};
+        }
+        if([401,403].includes(response.status)){stopReason=`HTTP ${response.status}`;break;}
         if(!response.ok)continue;
         const doc=new DOMParser().parseFromString(await response.text(),'text/html');
         const documentUrl=canonical(response.url||key);
@@ -127,7 +135,7 @@ async function scanChunk(state){
         for(const nested of [...active.children].filter(el=>['UL','OL'].includes(el.tagName)))walk(nested,key,parent.title,parent.parentSections||[],(Number(parent.depth)||0)+1);
       }catch{}
     }
-    return{...state,items:[...items.values()],queue,visited:[...visited],stopReason};
+    return{...state,items:[...items.values()],queue,visited:[...visited],stopReason,retryAt:0};
   }});
   if(!injection?.result)throw new Error('Не удалось проверить следующую часть дерева.');
   return injection.result;
@@ -136,7 +144,7 @@ async function scanChunk(state){
 async function startImport(message){
   const {activeJob}=await chrome.storage.local.get('activeJob');
   if(activeJob?.phase==='running')throw new Error('Другая фоновая операция ещё выполняется.');
-  const job={type:'import',phase:'running',tabId:message.tabId,done:0,total:message.items.length,added:0,updated:0,failed:0,startedAt:Date.now()};
+  const job={type:'import',phase:'running',tabId:message.tabId,done:0,total:message.items.length,added:0,updated:0,failed:0,incompleteAssets:0,startedAt:Date.now()};
   const state={tabId:message.tabId,items:message.items,collectionId:message.collectionId,updateExisting:message.updateExisting,offset:0,job,stopReason:''};
   await chrome.storage.local.set({importProgress:state,activeJob:job});
   await scheduleResume();
@@ -149,13 +157,14 @@ async function processImport(){
     while(true){
       const {importProgress:state}=await chrome.storage.local.get('importProgress');
       if(!state)break;
+      if(state.retryAt&&state.retryAt>Date.now()){await chrome.alarms.create(RESUME_ALARM,{when:state.retryAt});break;}
       if(state.offset>=state.items.length||state.stopReason){
         await chrome.storage.local.set({activeJob:{...state.job,phase:'complete',stopReason:state.stopReason,finishedAt:Date.now()}});
         await chrome.storage.local.remove('importProgress');break;
       }
       const item=state.items[state.offset];
       const result=await importPage(state.tabId,item,state.collectionId,state.updateExisting,state.job);
-      const next={...state,offset:state.offset+1,job:result.job,stopReason:result.stopReason||''};
+      const next={...state,offset:result.retryAt?state.offset:state.offset+1,job:result.job,stopReason:'',retryAt:result.retryAt||0,retryCount:result.retryAt?(Number(state.retryCount)||0)+1:0};
       await chrome.storage.local.set({importProgress:next,activeJob:{...next.job,done:next.offset,stopReason:next.stopReason}});
     }
   }catch(error){
@@ -165,37 +174,44 @@ async function processImport(){
 }
 
 async function importPage(tabId,descriptor,collectionId,updateExisting,previousJob){
-  let {collections=[]}=await chrome.storage.local.get('collections');
-  const collection=collections.find(item=>item.id===collectionId);if(!collection)throw new Error('Выбранная библиотека больше не существует.');
-  const [injection]=await chrome.scripting.executeScript({target:{tabId},args:[[descriptor]],func:async descriptors=>{
-    const output=[];let stopReason='',lastRequestAt=0;const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const [injection]=await chrome.scripting.executeScript({target:{tabId},args:[[descriptor],Number(previousJob.retryCount)||0],func:async (descriptors,retryCount)=>{
+    const output=[];let stopReason='',retryAt=0,lastRequestAt=0;const offlineMissingAssets=new Set();const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+    const deferFor=response=>{const retryAfter=response.headers.get('Retry-After');const wait=retryAfter?( /^\d+$/.test(retryAfter)?Number(retryAfter)*1000:Math.max(0,Date.parse(retryAfter)-Date.now()) ):Math.min(60*60*1000,5*60*1000*2**Math.min(retryCount||0,4));retryAt=Date.now()+Math.max(60*1000,wait);stopReason=`HTTP ${response.status}`;};
     const politeFetch=async(...args)=>{if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));const response=await fetch(...args);lastRequestAt=Date.now();return response;};
     for(const descriptor of descriptors){const {url}=descriptor;try{
       const response=await politeFetch(url,{credentials:'include'});
-      if([401,403,429,503].includes(response.status)){stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;output.push({url,error:`Server requested a stop (${stopReason})`});break;}
+      if(response.status>=500||[408,425,429].includes(response.status)){
+        deferFor(response);break;
+      }
+      if([401,403].includes(response.status)){stopReason=`HTTP ${response.status}`;output.push({url,error:`Требуется доступ к странице (${stopReason})`});break;}
       if(!response.ok)throw new Error(`HTTP ${response.status}`);
       const doc=new DOMParser().parseFromString(await response.text(),'text/html'),root=doc.querySelector('main,article,[role="main"]')||doc.body,copy=root.cloneNode(true);
       copy.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,button,[role="navigation"]').forEach(node=>node.remove());
       const dataUrlCache=new Map();
-      const dataUrl=source=>{if(dataUrlCache.has(source))return dataUrlCache.get(source);const request=(async()=>{try{const r=await politeFetch(source,{credentials:'include'});if([401,403,429,503].includes(r.status)){stopReason=`HTTP ${r.status}${r.headers.get('Retry-After')?`, Retry-After: ${r.headers.get('Retry-After')}`:''}`;return null;}if(!r.ok)return null;const blob=await r.blob();return await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>resolve(null);reader.readAsDataURL(blob);});}catch{return null;}})();dataUrlCache.set(source,request);return request;};
+      const dataUrl=source=>{if(dataUrlCache.has(source))return dataUrlCache.get(source);const request=(async()=>{try{const r=await politeFetch(source,{credentials:'include'});if(r.status>=500||[408,425,429].includes(r.status)){deferFor(r);return null;}if(!r.ok){offlineMissingAssets.add(source);return null;}const blob=await r.blob();return await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>{offlineMissingAssets.add(source);resolve(null);};reader.readAsDataURL(blob);});}catch{offlineMissingAssets.add(source);return null;}})();dataUrlCache.set(source,request);return request;};
       for(const image of copy.querySelectorAll('img')){const srcset=image.getAttribute('data-srcset')||image.getAttribute('srcset')||image.parentElement?.querySelector('source[srcset]')?.getAttribute('srcset')||'',largest=srcset.split(',').map(candidate=>candidate.trim().split(/\s+/)).filter(candidate=>candidate[0]).sort((a,b)=>parseFloat(b[1])-parseFloat(a[1]))[0]?.[0],raw=image.getAttribute('data-src')||image.getAttribute('data-original')||image.getAttribute('data-lazy-src')||largest||image.getAttribute('src');if(!raw)continue;const absolute=new URL(raw,url).href;image.setAttribute('src',absolute);image.removeAttribute('srcset');image.removeAttribute('loading');const embedded=await dataUrl(absolute);if(embedded){image.setAttribute('src',embedded);if(image.parentElement?.tagName==='PICTURE')image.parentElement.querySelectorAll('source').forEach(node=>node.removeAttribute('srcset'));}if(stopReason)break;}
       const headings=[...copy.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((h,i)=>{if(!h.id)h.id=`sitedoc-heading-${i+1}`;return{id:h.id,title:(h.textContent||'').trim(),level:Number(h.tagName.slice(1))};}).filter(h=>h.title);
       const crumbs=doc.querySelector('[aria-label*="breadcrumb" i],.breadcrumb,.breadcrumbs'),breadcrumbs=crumbs?[...crumbs.querySelectorAll('a,[aria-current="page"]')].map(a=>({title:(a.textContent||'').trim(),url:a.href})).filter(x=>x.title):[];
       const embedCss=async(css,base)=>{const resources=[...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/gi)].map(match=>match[1].trim()).filter(source=>!source.startsWith('data:')&&!source.startsWith('#')))];for(const source of resources){const absolute=new URL(source,base).href;const embedded=await dataUrl(absolute);css=css.split(source).join(embedded||absolute);if(stopReason)break;}return css;};
       const styles=[];
       for(const style of doc.querySelectorAll('style'))styles.push({href:url,css:await embedCss(style.textContent||'',url)});
-      for(const link of doc.querySelectorAll('link[rel="stylesheet"][href]')){if(stopReason)break;const href=new URL(link.getAttribute('href'),url).href;try{const r=await politeFetch(href,{credentials:'include'});if([401,403,429,503].includes(r.status)){stopReason=`HTTP ${r.status}${r.headers.get('Retry-After')?`, Retry-After: ${r.headers.get('Retry-After')}`:''}`;break;}if(r.ok)styles.push({href,css:await embedCss(await r.text(),href)});}catch{}}
+      for(const link of doc.querySelectorAll('link[rel="stylesheet"][href]')){if(stopReason)break;const href=new URL(link.getAttribute('href'),url).href;try{const r=await politeFetch(href,{credentials:'include'});if(r.status>=500||[408,425,429].includes(r.status)){deferFor(r);break;}if(r.ok)styles.push({href,css:await embedCss(await r.text(),href)});}catch{}}
       for(const node of copy.querySelectorAll('[style*="url("]')){let inline=node.getAttribute('style')||'';inline=await embedCss(inline,url);node.setAttribute('style',inline);}
-      output.push({title:doc.title||(headings[0]?.title)||url,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath:descriptor.navPath||descriptor.breadcrumbs||[],parentUrl:descriptor.parentUrl||null,parentSections:descriptor.parentSections||[],styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname});if(stopReason)break;
+      output.push({title:doc.title||(headings[0]?.title)||url,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath:descriptor.navPath||descriptor.breadcrumbs||[],parentUrl:descriptor.parentUrl||null,parentSections:descriptor.parentSections||[],styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname,offlineMissingAssets:[...offlineMissingAssets]});if(stopReason)break;
     }catch(error){output.push({url,error:error.message});}}
-    return{pages:output,stopReason};
+    return{pages:output,stopReason,retryAt};
   }});
   const result=injection?.result||{pages:[{url:descriptor.url,error:'Не удалось получить результат страницы.'}]};
   const job={...previousJob};
-  for(const page of result.pages||[]){if(page.error){job.failed++;continue;}const outcome=savePage(collection,page,updateExisting);if(outcome==='added')job.added++;else if(outcome==='updated')job.updated++;}
+  // A transient server response has no page data to commit. Avoid reading and
+  // rewriting the growing library for every retry attempt.
+  if(result.retryAt){job.retryCount=(Number(job.retryCount)||0)+1;return{job,stopReason:result.stopReason||'',retryAt:result.retryAt};}
+  let collections=await SiteDocStore.getCollections();
+  const collection=collections.find(item=>item.id===collectionId);if(!collection)throw new Error('Выбранная библиотека больше не существует.');
+  for(const page of result.pages||[]){if(page.error){job.failed++;continue;}const outcome=savePage(collection,page,updateExisting);if(outcome==='added')job.added++;else if(outcome==='updated')job.updated++;job.incompleteAssets=(Number(job.incompleteAssets)||0)+(page.offlineMissingAssets?.length||0);}
   const collectionIndex=collections.findIndex(item=>item.id===collectionId);collections[collectionIndex]=collection;
-  await chrome.storage.local.set({collections});
-  return{job,stopReason:result.stopReason||''};
+  await SiteDocStore.saveCollections(collections);
+  return{job,stopReason:result.stopReason||'',retryAt:result.retryAt||0};
 }
 
 async function resumeTasks(){

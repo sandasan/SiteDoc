@@ -4,12 +4,11 @@ const selectedForDelete = new Set();
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const current = () => collections.find(c => c.id === selectedCollection);
 const items = () => current()?.items || [];
-const persist = () => chrome.storage.local.set({ collections });
+const persist = () => SiteDocStore.saveCollections(collections);
 
 async function init() {
-  const saved = await chrome.storage.local.get('collections');
-  collections = Array.isArray(saved.collections) ? saved.collections : [{ id: crypto.randomUUID(), title: 'Моя библиотека', items: [] }];
-  if (!Array.isArray(saved.collections)) await persist();
+  collections = await SiteDocStore.getCollections();
+  if (!collections.length) { collections = [{ id: crypto.randomUUID(), title: 'Моя библиотека', items: [] }]; await persist(); }
   selectedCollection = collections[0]?.id || ''; render();
 }
 function render() {
@@ -46,11 +45,14 @@ function render() {
     $('#sectionDescription').hidden = p.kind !== 'section';
     if (p.kind === 'section') {
       $('#pagePreview').removeAttribute('srcdoc');
-    } else {
-      renderPagePreview(p);
-    }
+    } else void loadPagePreview(p);
   }
   updateBulkDeleteControls();
+}
+async function loadPagePreview(page) {
+  $('#pagePreview').removeAttribute('srcdoc');
+  const body = await SiteDocStore.getPage(page.id);
+  if (selectedPage === page.id && body) renderPagePreview({ ...page, ...body });
 }
 
 function updateBulkDeleteControls() {
@@ -90,8 +92,9 @@ function renderPagePreview(p) {
     `<span class="fact-chip">Сохранено: ${esc(date)}</span>`
   ].filter(Boolean);
   $('#pageFacts').innerHTML = `${crumbs.length ? `<div class="page-breadcrumbs">${crumbs.map(x => `<span>${esc(x)}</span>`).join('<i>›</i>')}</div>` : ''}<div class="fact-chips">${facts.join('')}</div><a class="source-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Открыть оригинал ↗</a>`;
-  const summary = (p.text || '').replace(/\s+/g, ' ').trim();
-  $('#pageSummary').textContent = summary ? `${summary.slice(0, 420)}${summary.length > 420 ? '…' : ''}` : 'Текстовый фрагмент для этой страницы не сохранён.';
+  const summary = (p.text || parsed.body.textContent || '').replace(/\s+/g, ' ').trim();
+  const missing = p.offlineMissingAssets || [];
+  $('#pageSummary').textContent = `${missing.length ? `Не удалось сохранить офлайн ${missing.length} изображений или ресурсов. При подключении к интернету можно обновить страницу. ` : ''}${summary ? `${summary.slice(0, 420)}${summary.length > 420 ? '…' : ''}` : 'Текстовый фрагмент для этой страницы не сохранён.'}`;
   const headings = (p.headings || []).filter(h => h.title);
   $('#headingLabel').textContent = `Заголовки страницы (${headings.length})`;
   $('#headingDetails').hidden = !headings.length;
@@ -166,7 +169,7 @@ $('#url').addEventListener('change', async e => { const p = items().find(x => x.
 $('#up').onclick = () => move(selectedPage, 'up'); $('#down').onclick = () => move(selectedPage, 'down'); $('#indent').onclick = () => move(selectedPage, 'indent');
 $('#outdent').onclick = async () => { const p = items().find(x => x.id === selectedPage); if (p) { p.parentId = null; await persist(); render(); } };
 $('#delete').onclick = async () => { const c = current(), remove = new Set([selectedPage]); let changed = true; while (changed) { changed = false; for (const p of c.items) if (remove.has(p.parentId) && !remove.has(p.id)) { remove.add(p.id); changed = true; } } c.items = c.items.filter(p => !remove.has(p.id)); selectedPage = ''; await persist(); render(); };
-$('#exportPdf').onclick = () => { const c = current(); if (!c?.items.length) return; const w = window.open('', '_blank'); w.document.write(printDocument(c)); w.document.close(); w.focus(); setTimeout(() => w.print(), 500); };
+$('#exportPdf').onclick = async () => { const w = window.open('', '_blank'); if (!w) return; const c = (await SiteDocStore.getFullCollections(selectedCollection))[0]; if (!c?.items.length) { w.close(); return; } w.document.write(printDocument(c)); w.document.close(); w.focus(); setTimeout(() => w.print(), 500); };
 function printDocument(c) {
   const pages = c.items.filter(p => p.kind !== 'section');
   const nestedContents = parent => c.items.filter(p => (p.parentId || null) === parent).map(p => {
@@ -231,5 +234,5 @@ function epub(c){
   cleanFiles.push({name:'OEBPS/content.opf',data:`<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="ru"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:${uid}</dc:identifier><dc:title>${enc(c.title)}</dc:title><dc:language>ru</dc:language><meta property="dcterms:modified">${new Date().toISOString().slice(0,19)}Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>${manifest}${assetManifest}</manifest><spine>${spine}</spine></package>`});
   return zip(cleanFiles);
 }
-$('#exportEpub').onclick = async () => { const c = current(); if (!c?.items.length) return; const blob=epub(c), url=URL.createObjectURL(blob); await chrome.downloads.download({url,filename:`${c.title.replace(/[\\/:*?"<>|]/g,'_')}.epub`,saveAs:true}); setTimeout(()=>URL.revokeObjectURL(url),60000); };
+$('#exportEpub').onclick = async () => { const c = (await SiteDocStore.getFullCollections(selectedCollection))[0]; if (!c?.items.length) return; const blob=epub(c), url=URL.createObjectURL(blob); await chrome.downloads.download({url,filename:`${c.title.replace(/[\\/:*?"<>|]/g,'_')}.epub`,saveAs:true}); setTimeout(()=>URL.revokeObjectURL(url),60000); };
 init();

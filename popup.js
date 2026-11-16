@@ -15,13 +15,15 @@ const read = keys => chrome.storage.local.get(keys);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function init() {
+  const storedCollections = await SiteDocStore.getCollections();
   const saved = await read(['collections', 'selectedCollectionId','sectionCandidates','activeJob']);
-  collections = Array.isArray(saved.collections) ? saved.collections : [];
+  collections = storedCollections;
   if (!Array.isArray(saved.collections)) {
     const first = { id: crypto.randomUUID(), title: 'Моя библиотека', items: [] };
     collections = [first];
     saved.selectedCollectionId = first.id;
-    await chrome.storage.local.set({ collections, selectedCollectionId: first.id });
+    await SiteDocStore.saveCollections(collections);
+    await chrome.storage.local.set({ selectedCollectionId: first.id });
   }
   const selectedId = collections.some(c => c.id === saved.selectedCollectionId) ? saved.selectedCollectionId : collections[0]?.id;
   renderLibrarySelect(selectedId);
@@ -72,7 +74,7 @@ function showJob(job){
     if(job.type==='scan'){
       const message=job.stopReason?`Сканирование остановлено ответом сервера (${job.stopReason}).`:`Сканирование завершено: проверено ${job.done} страниц.`;
       status.textContent=`${message} Отметьте страницы и нажмите «Добавить выбранные».`;
-    }else status.textContent=`Сохранение завершено: добавлено ${job.added}, обновлено ${job.updated}${job.failed?`, ошибок ${job.failed}`:''}${job.stopReason?`. Остановлено по ответу сервера (${job.stopReason}).`:'.'}`;
+    }else status.textContent=`Сохранение завершено: добавлено ${job.added}, обновлено ${job.updated}${job.failed?`, ошибок ${job.failed}`:''}${job.incompleteAssets?`, не удалось скачать офлайн ресурсов: ${job.incompleteAssets}`:''}${job.stopReason?`. Остановлено по ответу сервера (${job.stopReason}).`:'.'}`;
   }else if(job.phase==='error')status.textContent=`Фоновая операция завершилась с ошибкой: ${job.error||'неизвестная ошибка'}`;
   renderAddButton();
 }
@@ -173,7 +175,7 @@ renameLibraryForm.addEventListener('submit', async event => {
   if (title === library.title) { renameLibraryForm.hidden = true; return; }
   const previousTitle = library.title;
   library.title = title;
-  await chrome.storage.local.set({ collections });
+  await SiteDocStore.saveCollections(collections);
   renderLibrarySelect(library.id);
   renameLibraryForm.reset(); renameLibraryForm.hidden = true;
   status.textContent = `Библиотека «${previousTitle}» переименована в «${title}».`;
@@ -192,7 +194,8 @@ createLibraryForm.addEventListener('submit', async event => {
   }
   const created = { id: crypto.randomUUID(), title, items: [] };
   collections.push(created);
-  await chrome.storage.local.set({ collections, selectedCollectionId: created.id });
+  await SiteDocStore.saveCollections(collections);
+  await chrome.storage.local.set({ selectedCollectionId: created.id });
   renderLibrarySelect(created.id);
   createLibraryForm.reset(); createLibraryForm.hidden = true;
   status.textContent = `Создана библиотека «${created.title}». Страницы будут добавляться сюда.`;
@@ -201,7 +204,8 @@ document.querySelector('#deleteAllLibraries').addEventListener('click', async ()
   const pageCount = collections.reduce((sum, library) => sum + library.items.filter(item => item.kind !== 'section').length, 0);
   if (!confirm(`Удалить все ${collections.length} библиотек и ${pageCount} сохранённых страниц? Это действие нельзя отменить.`)) return;
   collections = [];
-  await chrome.storage.local.set({ collections: [], selectedCollectionId: '' });
+  await SiteDocStore.saveCollections([]);
+  await chrome.storage.local.set({ selectedCollectionId: '' });
   renderLibrarySelect('');
   preview.hidden = true; addSelected.hidden = true;
   status.textContent = 'Все библиотеки удалены. Создайте новую, чтобы продолжить.';
@@ -215,7 +219,8 @@ document.querySelector('#deleteLibrary').addEventListener('click', async () => {
   const index = collections.findIndex(item => item.id === library.id);
   collections = collections.filter(item => item.id !== library.id);
   const next = collections[Math.min(index, collections.length - 1)];
-  await chrome.storage.local.set({ collections, selectedCollectionId: next?.id || '' });
+  await SiteDocStore.saveCollections(collections);
+  await chrome.storage.local.set({ selectedCollectionId: next?.id || '' });
   renderLibrarySelect(next?.id || '');
   status.textContent = next
     ? `Библиотека «${library.title}» удалена. Выбрана «${next.title}».`
@@ -339,15 +344,15 @@ async function captureCurrent(tabId) {
       }
       return best;
     })();
-    const dataUrlCache = new Map();
+    const dataUrlCache = new Map(), offlineMissingAssets = new Set();
     const toDataUrl = source => {
       if(dataUrlCache.has(source))return dataUrlCache.get(source);
       const request=(async()=>{try {
         const response = await fetch(source, { credentials: 'include' });
-        if (!response.ok) return null;
+        if (!response.ok) { offlineMissingAssets.add(source); return null; }
         const blob = await response.blob();
-        return await new Promise(resolve => { const reader=new FileReader(); reader.onload=()=>resolve(reader.result); reader.onerror=()=>resolve(null); reader.readAsDataURL(blob); });
-      } catch { return null; }})();
+        return await new Promise(resolve => { const reader=new FileReader(); reader.onload=()=>resolve(reader.result); reader.onerror=()=>{offlineMissingAssets.add(source);resolve(null);}; reader.readAsDataURL(blob); });
+      } catch { offlineMissingAssets.add(source); return null; }})();
       dataUrlCache.set(source,request);
       return request;
     };
@@ -386,7 +391,7 @@ async function captureCurrent(tabId) {
       for(const source of urls){const absolute=new URL(source,location.href).href;const data=await toDataUrl(absolute);if(data)inline=inline.split(source).join(data);}
       node.setAttribute('style',inline);
     }
-    return {title:document.title,url:location.href,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath:menuHierarchy.path,parentUrl:menuHierarchy.parentUrl,parentTitle:menuHierarchy.parentTitle,parentSections:menuHierarchy.parentSections,styles,siteTitle:document.querySelector('meta[property="og:site_name"]')?.content||location.hostname};
+    return {title:document.title,url:location.href,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath:menuHierarchy.path,parentUrl:menuHierarchy.parentUrl,parentTitle:menuHierarchy.parentTitle,parentSections:menuHierarchy.parentSections,styles,siteTitle:document.querySelector('meta[property="og:site_name"]')?.content||location.hostname,offlineMissingAssets:[...offlineMissingAssets]};
   }});
   return page.result;
 }
@@ -400,8 +405,8 @@ async function saveCurrent() {
     const collection=collections.find(c=>c.id===select.value); if(!collection)throw new Error('Коллекция не найдена');
     const result=saveToCollection(collection,data);
     if(result==='skipped'){status.textContent='Оставил сохранённую копию без изменений.';return;}
-    await chrome.storage.local.set({collections});
-    status.textContent = result==='updated' ? `Обновлено: ${data.title}` : `Добавлено: ${data.title}`;
+    await SiteDocStore.saveCollections(collections);
+    status.textContent = `${result==='updated' ? `Обновлено: ${data.title}` : `Добавлено: ${data.title}`}${data.offlineMissingAssets?.length?`. Не удалось скачать офлайн ресурсов: ${data.offlineMissingAssets.length}`:''}`;
   } catch(e) { status.textContent=`Не удалось сохранить страницу: ${e.message}`; }
 }
 
