@@ -15,6 +15,7 @@
     <div class="library-picker">
       <select id="collection"></select>
       <button id="showCreateLibrary" class="new-library-toggle" type="button" title="Создать библиотеку">＋</button>
+      <button id="showRenameLibrary" class="rename-library-toggle" type="button" title="Переименовать выбранную библиотеку" aria-label="Переименовать выбранную библиотеку">✎</button>
       <button id="deleteLibrary" class="delete-library-toggle" type="button" title="Удалить выбранную библиотеку" aria-label="Удалить выбранную библиотеку">×</button>
     </div>
     <button id="deleteAllLibraries" class="delete-libraries" type="button">Удалить все библиотеки</button>
@@ -23,6 +24,12 @@
       <input id="libraryName" type="text" maxlength="80" placeholder="Название новой библиотеки" autocomplete="off" required>
       <button class="primary" type="submit">Создать</button>
       <button id="cancelCreateLibrary" type="button" aria-label="Отменить создание">×</button>
+    </form>
+    <form id="renameLibraryForm" class="create-library" hidden>
+      <label class="visually-hidden" for="renamedLibraryName">Новое название библиотеки</label>
+      <input id="renamedLibraryName" type="text" maxlength="80" placeholder="Новое название библиотеки" autocomplete="off" required>
+      <button class="primary" type="submit">Сохранить</button>
+      <button id="cancelRenameLibrary" type="button" aria-label="Отменить переименование">×</button>
     </form>
 
     <div class="popup-actions">

@@ -6,6 +6,7 @@ const addSelected = document.querySelector('#addSelected');
 const selectAll = document.querySelector('#selectAll');
 const selectedCount = document.querySelector('#selectedCount');
 const createLibraryForm = document.querySelector('#createLibraryForm');
+const renameLibraryForm = document.querySelector('#renameLibraryForm');
 let candidatePages = new Map();
 let collections = [];
 let activeJobState=null;
@@ -109,15 +110,54 @@ function renderLibrarySelect(selectedId) {
   document.querySelector('#findSection').disabled = !collections.length;
   document.querySelector('#deleteAllLibraries').disabled = !collections.length;
   document.querySelector('#deleteLibrary').disabled = !collections.length;
+  document.querySelector('#showRenameLibrary').disabled = !collections.length;
 }
 
-select.addEventListener('change', () => chrome.storage.local.set({ selectedCollectionId: select.value }));
+select.addEventListener('change', () => {
+  renameLibraryForm.reset(); renameLibraryForm.hidden = true;
+  chrome.storage.local.set({ selectedCollectionId: select.value });
+});
 document.querySelector('#showCreateLibrary').addEventListener('click', () => {
+  renameLibraryForm.hidden = true;
+  renameLibraryForm.reset();
   createLibraryForm.hidden = !createLibraryForm.hidden;
   if (!createLibraryForm.hidden) document.querySelector('#libraryName').focus();
 });
 document.querySelector('#cancelCreateLibrary').addEventListener('click', () => {
   createLibraryForm.reset(); createLibraryForm.hidden = true;
+});
+document.querySelector('#showRenameLibrary').addEventListener('click', () => {
+  const library = collections.find(item => item.id === select.value);
+  if (!library) return;
+  createLibraryForm.hidden = true;
+  createLibraryForm.reset();
+  renameLibraryForm.hidden = !renameLibraryForm.hidden;
+  if (!renameLibraryForm.hidden) {
+    document.querySelector('#renamedLibraryName').value = library.title;
+    document.querySelector('#renamedLibraryName').focus();
+    document.querySelector('#renamedLibraryName').select();
+  }
+});
+document.querySelector('#cancelRenameLibrary').addEventListener('click', () => {
+  renameLibraryForm.reset(); renameLibraryForm.hidden = true;
+});
+renameLibraryForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  const library = collections.find(item => item.id === select.value);
+  const title = document.querySelector('#renamedLibraryName').value.trim();
+  if (!library || !title) return;
+  const duplicate = collections.find(item => item.id !== library.id && item.title.trim().toLocaleLowerCase() === title.toLocaleLowerCase());
+  if (duplicate) {
+    status.textContent = `Библиотека «${duplicate.title}» уже существует.`;
+    return;
+  }
+  if (title === library.title) { renameLibraryForm.hidden = true; return; }
+  const previousTitle = library.title;
+  library.title = title;
+  await chrome.storage.local.set({ collections });
+  renderLibrarySelect(library.id);
+  renameLibraryForm.reset(); renameLibraryForm.hidden = true;
+  status.textContent = `Библиотека «${previousTitle}» переименована в «${title}».`;
 });
 createLibraryForm.addEventListener('submit', async event => {
   event.preventDefault();

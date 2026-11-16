@@ -80,6 +80,8 @@
 .library-picker{display:flex;align-items:center;gap:7px}
 .library-picker select{min-width:0;flex:1;margin:4px 0 12px}
 .popup .new-library-toggle{flex:0 0 36px;width:36px;height:36px;margin:4px 0 12px;padding:0;border:1px solid var(--line);background:#fff;color:var(--green);font-size:20px}
+.popup .rename-library-toggle{flex:0 0 36px;width:36px;height:36px;margin:4px 0 12px;padding:0;border:1px solid var(--line);background:#fff;color:var(--green);font-size:17px}
+.popup .rename-library-toggle:disabled{opacity:.5;cursor:not-allowed}
 .popup .delete-library-toggle{flex:0 0 36px;width:36px;height:36px;margin:4px 0 12px;padding:0;border:1px solid #eed0ce;background:#fff7f6;color:#9e3b38;font-size:20px}
 .popup .delete-library-toggle:disabled{opacity:.5;cursor:not-allowed}
 .create-library{display:flex;align-items:center;gap:6px;margin:-4px 0 12px}
