@@ -5,18 +5,53 @@ const sectionList = document.querySelector('#sectionLinks');
 const addSelected = document.querySelector('#addSelected');
 const selectAll = document.querySelector('#selectAll');
 const selectedCount = document.querySelector('#selectedCount');
+const createLibraryForm = document.querySelector('#createLibraryForm');
 let candidatePages = new Map();
+let collections = [];
 const read = keys => chrome.storage.local.get(keys);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function init() {
-  const { collections = [] } = await read(['collections']);
+  const saved = await read(['collections', 'selectedCollectionId']);
+  collections = saved.collections || [];
   if (!collections.length) {
     const first = { id: crypto.randomUUID(), title: 'Моя библиотека', items: [] };
-    await chrome.storage.local.set({ collections: [first] }); collections.push(first);
+    collections = [first];
+    await chrome.storage.local.set({ collections, selectedCollectionId: first.id });
   }
   select.innerHTML = collections.map(c => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join('');
+  select.value = collections.some(c => c.id === saved.selectedCollectionId) ? saved.selectedCollectionId : collections[0].id;
+  if (select.value !== saved.selectedCollectionId) await chrome.storage.local.set({ selectedCollectionId: select.value });
 }
+
+select.addEventListener('change', () => chrome.storage.local.set({ selectedCollectionId: select.value }));
+document.querySelector('#showCreateLibrary').addEventListener('click', () => {
+  createLibraryForm.hidden = !createLibraryForm.hidden;
+  if (!createLibraryForm.hidden) document.querySelector('#libraryName').focus();
+});
+document.querySelector('#cancelCreateLibrary').addEventListener('click', () => {
+  createLibraryForm.reset(); createLibraryForm.hidden = true;
+});
+createLibraryForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  const title = document.querySelector('#libraryName').value.trim();
+  if (!title) return;
+  const existing = collections.find(item => item.title.trim().toLocaleLowerCase() === title.toLocaleLowerCase());
+  if (existing) {
+    select.value = existing.id;
+    await chrome.storage.local.set({ selectedCollectionId: existing.id });
+    status.textContent = `Библиотека «${existing.title}» уже есть — выбрал её.`;
+    createLibraryForm.hidden = true; createLibraryForm.reset();
+    return;
+  }
+  const created = { id: crypto.randomUUID(), title, items: [] };
+  collections.push(created);
+  await chrome.storage.local.set({ collections, selectedCollectionId: created.id });
+  select.add(new Option(created.title, created.id));
+  select.value = created.id;
+  createLibraryForm.reset(); createLibraryForm.hidden = true;
+  status.textContent = `Создана библиотека «${created.title}». Страницы будут добавляться сюда.`;
+});
 
 function normalizeUrl(value) {
   const url = new URL(value);

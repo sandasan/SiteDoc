@@ -11,8 +11,17 @@
       <div><b>SiteDoc</b><small>Сохранение документации офлайн</small></div>
     </header>
 
-    <label for="collection">Добавлять в коллекцию</label>
-    <select id="collection"></select>
+    <label for="collection">Библиотека для сохранения</label>
+    <div class="library-picker">
+      <select id="collection"></select>
+      <button id="showCreateLibrary" class="new-library-toggle" type="button" title="Создать библиотеку">＋</button>
+    </div>
+    <form id="createLibraryForm" class="create-library" hidden>
+      <label class="visually-hidden" for="libraryName">Название библиотеки</label>
+      <input id="libraryName" type="text" maxlength="80" placeholder="Название новой библиотеки" autocomplete="off" required>
+      <button class="primary" type="submit">Создать</button>
+      <button id="cancelCreateLibrary" type="button" aria-label="Отменить создание">×</button>
+    </form>
 
     <div class="popup-actions">
       <button id="save" class="primary action-card">

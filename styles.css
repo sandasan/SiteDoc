@@ -62,3 +62,12 @@
 .heading-details a{color:#426856;text-decoration:none}
 #pagePreview{display:block;width:100%;height:min(68vh,760px);min-height:360px;border:1px solid var(--line);border-radius:9px;background:#fff}
 .section-description{padding:14px;border-radius:8px;background:#f4f7f5;color:#63716a;font-size:13px}
+.library-picker{display:flex;align-items:center;gap:7px}
+.library-picker select{min-width:0;flex:1;margin:4px 0 12px}
+.popup .new-library-toggle{flex:0 0 36px;width:36px;height:36px;margin:4px 0 12px;padding:0;border:1px solid var(--line);background:#fff;color:var(--green);font-size:20px}
+.create-library{display:flex;align-items:center;gap:6px;margin:-4px 0 12px}
+.create-library[hidden]{display:none}
+.create-library input{min-width:0;flex:1;padding:8px}
+.popup .create-library button{width:auto;margin:0;padding:8px 10px;white-space:nowrap}
+.popup .create-library button[type="button"]{width:34px;padding:7px;background:#edf2ef;font-size:18px}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
