@@ -20,6 +20,16 @@ document.querySelector('#save').addEventListener('click', async () => {
       const root = document.querySelector('main, article, [role="main"]') || document.body;
       const copy = root.cloneNode(true);
       copy.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,button,[role="navigation"],.advertisement,.ads').forEach(n => n.remove());
+      const usedIds = new Set([...copy.querySelectorAll('[id]')].map(node => node.id));
+      const headings = [...copy.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((heading, index) => {
+        if (!heading.id) {
+          const base = `sitedoc-heading-${index + 1}`;
+          let id = base, suffix = 1;
+          while (usedIds.has(id)) id = `${base}-${++suffix}`;
+          heading.id = id; usedIds.add(id);
+        }
+        return { id: heading.id, title: (heading.innerText || heading.textContent || '').trim(), level: Number(heading.tagName.slice(1)) };
+      }).filter(heading => heading.title);
 
       // Inline images so EPUB reading does not depend on the source site remaining online.
       let embeddedBytes = 0;
@@ -61,14 +71,14 @@ document.querySelector('#save').addEventListener('click', async () => {
           if (sheet.href) styles.push({ href: sheet.href, css: `@import url("${sheet.href.replaceAll('"', '%22')}");` });
         }
       }
-      return { title: document.title, url: location.href, html: copy.innerHTML, text: copy.innerText || copy.textContent || '', styles, siteTitle: document.querySelector('meta[property="og:site_name"]')?.content || location.hostname };
+      return { title: document.title, url: location.href, html: copy.innerHTML, text: copy.innerText || copy.textContent || '', headings, styles, siteTitle: document.querySelector('meta[property="og:site_name"]')?.content || location.hostname };
     } });
     const data = page.result;
     const { collections = [] } = await read(['collections']);
     const collection = collections.find(c => c.id === select.value);
     if (!collection) throw new Error('Коллекция не найдена');
     const id = crypto.randomUUID();
-    collection.items.push({ id, parentId: null, title: data.title || data.url, url: data.url, siteTitle: data.siteTitle, html: data.html, text: data.text, styles: data.styles || [], addedAt: Date.now() });
+    collection.items.push({ id, parentId: null, title: data.title || data.url, url: data.url, siteTitle: data.siteTitle, html: data.html, text: data.text, headings: data.headings || [], styles: data.styles || [], addedAt: Date.now() });
     await chrome.storage.local.set({ collections });
     status.textContent = `Добавлено: ${data.title}`;
   } catch (e) { status.textContent = `Не удалось сохранить страницу: ${e.message}`; }

@@ -43,8 +43,16 @@ $('#outdent').onclick = async () => { const p = items().find(x => x.id === selec
 $('#delete').onclick = async () => { const c = current(); c.items = c.items.filter(p => p.id !== selectedPage && p.parentId !== selectedPage); selectedPage = ''; await persist(); render(); };
 $('#exportPdf').onclick = () => { const c = current(); if (!c?.items.length) return; const w = window.open('', '_blank'); w.document.write(printDocument(c)); w.document.close(); w.focus(); setTimeout(() => w.print(), 500); };
 function printDocument(c) {
-  const rows = c.items.map((p,i) => `<article><h${p.parentId ? 2 : 1}>${esc(p.title)}</h${p.parentId ? 2 : 1}><p class="source"><a href="${esc(p.url)}">${esc(p.url)}</a></p><div>${esc(p.text || '')}</div></article>`).join('');
-  return `<!doctype html><html lang="ru"><meta charset="utf-8"><title>${esc(c.title)}</title><style>body{font:12pt/1.55 Georgia,serif;max-width:760px;margin:2cm auto;color:#222}h1{font-size:25pt;margin:0 0 5mm}h2{font-size:18pt;break-after:avoid}.source{font:9pt sans-serif;color:#666;overflow-wrap:anywhere}article{break-before:page}article:first-of-type{break-before:auto}@media screen{body{padding:24px}}@page{margin:18mm}</style><h1>${esc(c.title)}</h1>${rows}</html>`;
+  const nestedContents = parent => c.items.filter(p => (p.parentId || null) === parent).map(p => {
+    const i = c.items.indexOf(p), sub = nestedContents(p.id);
+    return `<li><a href="#page-${i}">${esc(p.title)}</a>${sub ? `<ol>${sub}</ol>` : ''}<ul>${(p.headings || []).filter(h => h.title).map(h => `<li><a href="#page-${i}-${encodeURIComponent(h.id)}">${esc(h.title)}</a></li>`).join('')}</ul></li>`;
+  }).join('');
+  const rows = c.items.map((p,i) => {
+    const body = p.html || `<pre>${esc(p.text || '')}</pre>`;
+    const css = (p.styles || []).map(s => s.css).filter(Boolean).join('\n').replace(/<\/style/gi,'<\\/style');
+    return `<article id="page-${i}"><h1>${esc(p.title)}</h1><p class="source"><a href="${esc(p.url)}">${esc(p.url)}</a></p><style>${css}</style><main>${body}</main></article>`;
+  }).join('');
+  return `<!doctype html><html lang="ru"><meta charset="utf-8"><title>${esc(c.title)}</title><style>body{font:12pt/1.55 Georgia,serif;color:#222}article{max-width:900px;margin:0 auto;break-before:page}article:first-of-type{break-before:auto}article img{max-width:100%;height:auto}h1,h2,h3,h4{break-after:avoid}.source{font:9pt sans-serif;color:#666;overflow-wrap:anywhere}#contents{max-width:900px;margin:0 auto;break-after:page}#contents ul,#contents ol{padding-left:1.5em}a{color:inherit}@media screen{body{padding:24px}}@page{margin:18mm}</style><section id="contents"><h1>${esc(c.title)}</h1><h2>Содержание</h2><ol>${nestedContents(null)}</ol></section>${rows}</html>`;
 }
 
 // Small dependency-free ZIP writer (stored entries) for EPUB 3 export.
@@ -56,7 +64,7 @@ function epub(c){
   const manifest=list.map((p,i)=>`<item id="p${i}" href="p${i}.xhtml" media-type="application/xhtml+xml"/>`).join('');
   const spine=list.map((p,i)=>`<itemref idref="p${i}"/>`).join('');
   const children=parent=>list.filter(p=>(p.parentId||null)===parent);
-  const navTree=parent=>children(parent).map(p=>{const i=list.indexOf(p), nested=navTree(p.id);return `<li><a href="p${i}.xhtml">${enc(p.title)}</a>${nested?`<ol>${nested}</ol>`:''}</li>`;}).join('');
+  const navTree=parent=>children(parent).map(p=>{const i=list.indexOf(p), nested=navTree(p.id), headings=(p.headings||[]).filter(h=>h.title).map(h=>`<li><a href="p${i}.xhtml#${enc(h.id)}">${enc(h.title)}</a></li>`).join('');return `<li><a href="p${i}.xhtml">${enc(p.title)}</a>${nested||headings?`<ol>${headings}${nested}</ol>`:''}</li>`;}).join('');
   const files=[
     {name:'mimetype',data:'application/epub+zip'},
     {name:'META-INF/container.xml',data:'<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'},
