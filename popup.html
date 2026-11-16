@@ -1,1 +1,43 @@
-<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SiteDoc</title><link rel="stylesheet" href="styles.css"><body class="popup"><main><div class="brand"><span class="mark">S</span><div><b>SiteDoc</b><small>Офлайн-библиотека сайтов</small></div></div><label for="collection">Коллекция</label><select id="collection"></select><button id="save" class="primary">Добавить эту страницу</button><button id="findSection" class="secondary">Найти страницы раздела</button><section id="sectionPreview" class="section-preview" hidden><label class="select-all"><input id="selectAll" type="checkbox" checked> Выбрать все найденные</label><div id="sectionLinks"></div><button id="addSelected" class="primary" hidden>Добавить выбранные</button></section><p id="status" role="status"></p><a href="library.html" target="_blank">Открыть библиотеку →</a></main><script src="popup.js"></script></body></html>
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SiteDoc</title>
+<link rel="stylesheet" href="styles.css">
+<body class="popup">
+  <main>
+    <header class="popup-brand">
+      <span class="mark" aria-hidden="true">S</span>
+      <div><b>SiteDoc</b><small>Сохранение документации офлайн</small></div>
+    </header>
+
+    <label for="collection">Добавлять в коллекцию</label>
+    <select id="collection"></select>
+
+    <div class="popup-actions">
+      <button id="save" class="primary action-card">
+        <span class="action-icon" aria-hidden="true">＋</span>
+        <span><b>Сохранить эту страницу</b><small>Добавить или обновить открытую страницу</small></span>
+      </button>
+      <button id="findSection" class="secondary action-card">
+        <span class="action-icon" aria-hidden="true">☷</span>
+        <span><b>Найти страницы раздела</b><small>Соседние страницы из меню документации</small></span>
+      </button>
+    </div>
+
+    <section id="sectionPreview" class="section-preview" hidden aria-label="Найденные страницы">
+      <div class="preview-heading">
+        <div><b>Страницы раздела</b><small id="sectionContext">Проверьте состав перед добавлением</small></div>
+        <span id="resultCount" class="count-badge"></span>
+      </div>
+      <label class="select-all"><input id="selectAll" type="checkbox" checked><span>Выбрать все</span><small id="selectedCount"></small></label>
+      <div id="sectionLinks"></div>
+      <button id="addSelected" class="primary add-selected" hidden>Добавить выбранные страницы</button>
+    </section>
+
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+    <footer class="popup-footer"><a href="library.html" target="_blank">Открыть библиотеку <span aria-hidden="true">↗</span></a></footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

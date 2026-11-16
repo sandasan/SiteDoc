@@ -3,6 +3,8 @@ const status = document.querySelector('#status');
 const preview = document.querySelector('#sectionPreview');
 const sectionList = document.querySelector('#sectionLinks');
 const addSelected = document.querySelector('#addSelected');
+const selectAll = document.querySelector('#selectAll');
+const selectedCount = document.querySelector('#selectedCount');
 let candidatePages = new Map();
 const read = keys => chrome.storage.local.get(keys);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -109,7 +111,7 @@ async function saveCurrent() {
 }
 
 async function findSectionLinks() {
-    status.textContent='Ищу соседние страницы в меню документации…';
+  status.textContent='Ищу соседние страницы в меню документации…';
   try {
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
     const [result]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>{
@@ -161,16 +163,24 @@ async function findSectionLinks() {
     }});
     if(!result?.length){status.textContent='Не нашёл соседние страницы в меню или папке URL.';return;}
     candidatePages=new Map(result.map(item=>[item.url,item]));
-    sectionList.innerHTML=result.map(item=>`<label class="section-link"><input type="checkbox" value="${esc(item.url)}" checked><span>${esc(item.title)}<small>${esc([...(item.breadcrumbs||[]).map(x=>x.title),item.url].filter(Boolean).join(' › '))}</small></span></label>`).join('');
+    const context=result.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Группа страниц из меню сайта';
+    document.querySelector('#sectionContext').textContent=context;
+    document.querySelector('#resultCount').textContent=result.length;
+    sectionList.innerHTML=result.map(item=>{
+      const isCurrent=normalizeUrl(item.url)===normalizeUrl(tab.url);
+      const path=new URL(item.url).pathname;
+      return `<label class="section-link ${isCurrent?'is-current':''}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>`;
+    }).join('');
+    selectAll.checked=true;selectAll.indeterminate=false;updateSelectionCount();
     preview.hidden=false; addSelected.hidden=false;
-    status.textContent=`Найдено страниц: ${result.length} (максимум 30). Проверьте список перед добавлением.`;
+    status.textContent='Отметьте страницы, которые хотите сохранить. Текущая страница тоже включена.';
   }catch(e){status.textContent=`Не удалось прочитать раздел: ${e.message}`;}
 }
 
 async function fetchSelectedPages() {
   const urls=[...sectionList.querySelectorAll('input:checked')].map(input=>input.value).slice(0,30);
   if(!urls.length){status.textContent='Выберите хотя бы одну страницу.';return;}
-  status.textContent=`Загружаю выбранные страницы (0/${urls.length})…`;
+  status.textContent=`Добавляю ${urls.length} страниц…`;
   addSelected.disabled=true;
   try{
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
@@ -234,5 +244,13 @@ async function fetchSelectedPages() {
 document.querySelector('#save').addEventListener('click',saveCurrent);
 document.querySelector('#findSection').addEventListener('click',findSectionLinks);
 addSelected.addEventListener('click',fetchSelectedPages);
-document.querySelector('#selectAll').addEventListener('change',e=>sectionList.querySelectorAll('input[type=checkbox]').forEach(x=>x.checked=e.target.checked));
+function updateSelectionCount(){
+  const boxes=[...sectionList.querySelectorAll('input[type=checkbox]')],checked=boxes.filter(x=>x.checked).length;
+  selectedCount.textContent=`${checked} из ${boxes.length}`;
+  selectAll.checked=checked===boxes.length;selectAll.indeterminate=checked>0&&checked<boxes.length;
+  addSelected.textContent=checked?`Добавить выбранные (${checked})`:'Выберите страницы';
+  addSelected.disabled=checked===0;
+}
+sectionList.addEventListener('change',updateSelectionCount);
+selectAll.addEventListener('change',e=>{sectionList.querySelectorAll('input[type=checkbox]').forEach(x=>x.checked=e.target.checked);updateSelectionCount();});
 init();
