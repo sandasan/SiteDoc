@@ -8,6 +8,7 @@ const selectedCount = document.querySelector('#selectedCount');
 const createLibraryForm = document.querySelector('#createLibraryForm');
 const renameLibraryForm = document.querySelector('#renameLibraryForm');
 let candidatePages = new Map();
+let candidateCurrentUrl = '';
 let collections = [];
 let activeJobState=null;
 const read = keys => chrome.storage.local.get(keys);
@@ -34,13 +35,18 @@ async function init() {
 }
 
 function renderCandidates(items,currentUrl=''){
+  candidateCurrentUrl=currentUrl;
   candidatePages=new Map(items.map(item=>[item.url,item]));
+  const library=collections.find(item=>item.id===select.value);
+  const canonical=value=>{try{const url=new URL(value);url.hash='';if(url.pathname.length>1)url.pathname=url.pathname.replace(/\/+$/,'');return url.href;}catch{return String(value||'');}};
+  const savedUrls=new Set((library?.items||[]).filter(item=>item.kind!=='section').map(item=>canonical(item.url)));
   const context=items.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Все разделы и подразделы, найденные в меню сайта';
   document.querySelector('#sectionContext').textContent=context;
   document.querySelector('#resultCount').textContent=items.length;
   sectionList.innerHTML=items.map(item=>{
     const isCurrent=currentUrl&&normalizeUrl(item.url)===normalizeUrl(currentUrl),path=new URL(item.url).pathname,depth=Math.min(8,Math.max(0,Number(item.depth)||0));
-    return `<label class="section-link ${isCurrent?'is-current':''} ${depth?'is-descendant':''}" style="--depth:${depth}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>`;
+    const alreadySaved=savedUrls.has(canonical(item.url));
+    return `<label class="section-link ${isCurrent?'is-current':''} ${depth?'is-descendant':''}" style="--depth:${depth}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${alreadySaved?'<span class="current-badge saved-badge">Уже в библиотеке</span>':''}${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>`;
   }).join('');
   selectAll.checked=true;selectAll.indeterminate=false;updateSelectionCount();preview.hidden=false;addSelected.hidden=false;
 }
@@ -116,6 +122,7 @@ function renderLibrarySelect(selectedId) {
 select.addEventListener('change', () => {
   renameLibraryForm.reset(); renameLibraryForm.hidden = true;
   chrome.storage.local.set({ selectedCollectionId: select.value });
+  if(candidatePages.size)renderCandidates([...candidatePages.values()],candidateCurrentUrl);
 });
 document.querySelector('#showCreateLibrary').addEventListener('click', () => {
   renameLibraryForm.hidden = true;
