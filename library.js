@@ -29,8 +29,51 @@ function render() {
     $('#editorHeading').textContent = p.kind === 'section' ? 'Раздел' : 'Страница';
     $('#title').value = p.title; $('#url').value = p.url || '';
     $('#url').hidden = p.kind === 'section';
-    $('#content').textContent = p.kind === 'section' ? 'Раздел в оглавлении. Страницы с такими же хлебными крошками будут добавляться сюда автоматически.' : (p.text || '(Текст на этой странице не найден.)');
+    $('#pageDetails').hidden = p.kind === 'section';
+    $('#pagePreview').hidden = p.kind === 'section';
+    $('#sectionDescription').hidden = p.kind !== 'section';
+    if (p.kind === 'section') {
+      $('#pagePreview').removeAttribute('srcdoc');
+    } else {
+      renderPagePreview(p);
+    }
   }
+}
+function renderPagePreview(p) {
+  const parsed = new DOMParser().parseFromString(p.html || `<pre>${esc(p.text || '')}</pre>`, 'text/html');
+  parsed.querySelectorAll('script,iframe,frame,object,embed,form,meta,base,link,style,video,audio,source').forEach(node => node.remove());
+  for (const node of parsed.body.querySelectorAll('*')) {
+    for (const attr of [...node.attributes]) {
+      const name = attr.name.toLowerCase(), value = attr.value.trim();
+      if (name.startsWith('on') || name === 'srcdoc' || name === 'srcset') node.removeAttribute(attr.name);
+      else if (['src','poster','xlink:href'].includes(name) && !/^(data:image\/|blob:)/i.test(value)) node.removeAttribute(attr.name);
+      else if (['href','action','formaction'].includes(name) && /^\s*javascript:/i.test(value)) node.removeAttribute(attr.name);
+    }
+  }
+  const body = parsed.body.innerHTML;
+  const siteCss = (p.styles || []).map(item => item.css || '').filter(Boolean).join('\n').replace(/<\/style/gi, '<\\/style');
+  const title = esc(p.title);
+  const doc = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline' data:; font-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'"><title>${title}</title><style>${siteCss}</style><style>img{max-width:100%;height:auto}body{overflow-wrap:anywhere}</style></head><body>${body}</body></html>`;
+  $('#pagePreview').srcdoc = doc;
+
+  const images = parsed.querySelectorAll('img').length;
+  const words = (p.text || '').trim().split(/\s+/).filter(Boolean).length;
+  const when = p.updatedAt || p.addedAt;
+  const date = when ? new Date(when).toLocaleString() : 'Не указана';
+  const crumbs = (p.breadcrumbs || []).map(x => x.title).filter(Boolean);
+  const facts = [
+    p.siteTitle ? `<span class="fact-chip">${esc(p.siteTitle)}</span>` : '',
+    `<span class="fact-chip">${words.toLocaleString()} слов</span>`,
+    `<span class="fact-chip">${images} изображений</span>`,
+    `<span class="fact-chip">Сохранено: ${esc(date)}</span>`
+  ].filter(Boolean);
+  $('#pageFacts').innerHTML = `${crumbs.length ? `<div class="page-breadcrumbs">${crumbs.map(x => `<span>${esc(x)}</span>`).join('<i>›</i>')}</div>` : ''}<div class="fact-chips">${facts.join('')}</div><a class="source-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Открыть оригинал ↗</a>`;
+  const summary = (p.text || '').replace(/\s+/g, ' ').trim();
+  $('#pageSummary').textContent = summary ? `${summary.slice(0, 420)}${summary.length > 420 ? '…' : ''}` : 'Текстовый фрагмент для этой страницы не сохранён.';
+  const headings = (p.headings || []).filter(h => h.title);
+  $('#headingLabel').textContent = `Заголовки страницы (${headings.length})`;
+  $('#headingDetails').hidden = !headings.length;
+  $('#headingList').innerHTML = headings.slice(0, 80).map(h => `<li class="heading-level-${Math.min(6,Math.max(1,Number(h.level)||1))}"><a href="#${encodeURIComponent(h.id)}" target="pagePreview">${esc(h.title)}</a></li>`).join('');
 }
 function move(id, action) {
   const a = items(), i = a.findIndex(p => p.id === id); if (i < 0) return;
