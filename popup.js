@@ -335,11 +335,25 @@ async function findSectionLinks() {
   try {
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
     const [injection]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>{
-      const here=new URL(location.href),canonical=value=>{try{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return '';}},current=canonical(location.href);
+      const here=new URL(location.href),canonical=value=>{try{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return '';}},current=canonical(location.href),currentParts=here.pathname.split('/').filter(Boolean),currentLang=currentParts.find(part=>/^[a-z]{2}(?:-[a-z]{2})?$/i.test(part));
       const titleOf=node=>(node?.innerText||node?.textContent||node?.getAttribute?.('aria-label')||node?.title||'').trim().replace(/\s+/g,' ');
       const valid=a=>{try{const raw=a.getAttribute('href')||'',u=new URL(a.href);return !raw.trim().startsWith('#')&&u.origin===here.origin&&!/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(u.pathname);}catch{return false;}};
       const candidates=new Map(),navRoots=[...document.querySelectorAll('nav, [role="navigation"], .md-nav, .wy-nav-side, .toctree-wrapper, .sidebar')];
       const roots=navRoots.length?navRoots:[document.body];
+      const addLink=(a)=>{
+        if(!valid(a))return;
+        const url=canonical(a.href);if(!url||url===current)return;
+        const u=new URL(url),parts=u.pathname.split('/').filter(Boolean),label=titleOf(a);
+        if(!label||label.length>160)return;
+        const langIndex=parts.findIndex(part=>/^[a-z]{2}(?:-[a-z]{2})?$/i.test(part));
+        if(currentLang&&langIndex>=0&&parts[langIndex].toLowerCase()!==currentLang.toLowerCase())return;
+        if(currentLang&&langIndex<0)return;
+        const parentPath=u.pathname.slice(0,u.pathname.lastIndexOf('/')+1),parentUrl=canonical(`${u.origin}${parentPath}`);
+        const depth=Math.max(0,parts.length-(/\.(html?|php|aspx?)$/i.test(parts.at(-1)||'')?1:0));
+        candidates.set(url,{url,title:label, breadcrumbs:[],navPath:[],parentUrl:parentUrl===url?null:parentUrl,parentTitle:'',parentSections:[],depth});
+      };
+      for(const root of roots)for(const a of root.querySelectorAll('a[href]'))addLink(a);
+      for(const a of document.querySelectorAll('a[href]'))addLink(a);
       const lists=[...new Set(roots.flatMap(root=>[...root.querySelectorAll('ul,ol')]))].filter(list=>!list.parentElement?.closest('ul,ol'));
       const walk=(list,pageAncestors=[],sectionAncestors=[],depth=0)=>{
         for(const li of [...list.children].filter(node=>node.tagName==='LI')){
@@ -361,6 +375,14 @@ async function findSectionLinks() {
         }
       };
       for(const list of lists)walk(list);
+      // Documentation generators commonly serve the parent directory as its index page.
+      // Add it as a discovery seed so its menu can reveal sibling sections and descendants.
+      const currentPath=here.pathname.replace(/[^/]+$/,'');
+      if(currentPath&&currentPath!=='/'){
+        const parentUrl=canonical(`${here.origin}${currentPath}`),folder=currentPath.split('/').filter(Boolean).at(-1)||here.hostname;
+        const parentTitle=folder.replace(/[-_]+/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+        if(parentUrl!==current)candidates.set(parentUrl,{url:parentUrl,title:parentTitle,breadcrumbs:[],navPath:[],parentUrl:null,parentTitle:'',parentSections:[],depth:Math.max(0,currentPath.split('/').filter(Boolean).length-1)});
+      }
       const title=document.querySelector('h1')?.innerText?.trim()||document.title||here.hostname;
       if(!candidates.has(current))candidates.set(current,{url:current,title,breadcrumbs:[],navPath:[],parentUrl:null,parentTitle:'',parentSections:[],depth:0});
       return {items:[...candidates.values()]};

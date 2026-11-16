@@ -71,9 +71,28 @@ async function scanChunk(state){
         if([401,403,429,503].includes(response.status)){stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;break;}
         if(!response.ok)continue;
         const doc=new DOMParser().parseFromString(await response.text(),'text/html');
-        const anchors=[...doc.querySelectorAll('a[href]')].filter(a=>{try{return new URL(a.href).origin===new URL(key).origin&&canonical(a.href)===key;}catch{return false;}});
+        const documentUrl=canonical(response.url||key);
+        const anchors=[...doc.querySelectorAll('a[href]')].filter(a=>{try{return new URL(a.href).origin===new URL(key).origin&&(canonical(a.href)===key||canonical(a.href)===documentUrl);}catch{return false;}});
         let active=null;for(const anchor of anchors){const li=anchor.closest('li');if(li&&(!active||li.querySelectorAll('a[href]').length>active.querySelectorAll('a[href]').length))active=li;}
-        if(!active)continue;
+        if(!active){
+          // Some documentation themes render navigation without nested list markup,
+          // or only expose the active page in the sidebar. In that case, collect
+          // same-language documentation links from the page and let the queue walk
+          // their parent indexes as well.
+          const parts=new URL(documentUrl).pathname.split('/').filter(Boolean),language=parts.find(part=>/^[a-z]{2}(?:-[a-z]{2})?$/i.test(part));
+          for(const anchor of doc.querySelectorAll('a[href]')){
+            try{
+              const url=canonical(anchor.href),u=new URL(url),targetParts=u.pathname.split('/').filter(Boolean),targetLanguage=targetParts.find(part=>/^[a-z]{2}(?:-[a-z]{2})?$/i.test(part));
+              const title=titleOf(anchor).replace(/\s+/g,' ');
+              if(u.origin!==new URL(key).origin||!title||title.length>160||url===documentUrl||(language&&targetLanguage?.toLowerCase()!==language.toLowerCase())||/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(u.pathname))continue;
+              if(!items.has(url)){
+                const parentPath=u.pathname.slice(0,u.pathname.lastIndexOf('/')+1),depth=Math.max(0,targetParts.length-(/\.(html?|php|aspx?)$/i.test(targetParts.at(-1)||'')?1:0));
+                const descriptor={url,title,breadcrumbs:[],navPath:[],parentUrl:canonical(`${u.origin}${parentPath}`),parentTitle:'',parentSections:[],depth};items.set(url,descriptor);queue.push(descriptor);
+              }
+            }catch{}
+          }
+          continue;
+        }
         const walk=(node,parentUrl,parentTitle,parentSections,depth)=>{for(const child of [...node.children]){
           if(child.tagName!=='LI')continue;
           const direct=[...child.querySelectorAll(':scope > a[href],:scope > div > a[href],:scope > p > a[href]')].find(a=>{try{return new URL(a.href).origin===new URL(key).origin;}catch{return false;}});
