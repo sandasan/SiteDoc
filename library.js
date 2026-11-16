@@ -51,6 +51,41 @@ function printDocument(c) {
 const crcTable = (() => { const t = new Uint32Array(256); for (let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xedb88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t; })();
 function crc32(bytes){let c=0xffffffff;for(const b of bytes)c=crcTable[(c^b)&255]^(c>>>8);return (c^0xffffffff)>>>0;}
 function zip(files){const enc=new TextEncoder(), local=[], central=[];let offset=0;for(const f of files){const name=enc.encode(f.name),data=typeof f.data==='string'?enc.encode(f.data):f.data,crc=crc32(data),lh=new Uint8Array(30+name.length),lv=new DataView(lh.buffer);lv.setUint32(0,0x04034b50,true);lv.setUint16(4,20,true);lv.setUint32(14,crc,true);lv.setUint32(18,data.length,true);lv.setUint32(22,data.length,true);lv.setUint16(26,name.length,true);lh.set(name,30);local.push(lh,data);const ch=new Uint8Array(46+name.length),cv=new DataView(ch.buffer);cv.setUint32(0,0x02014b50,true);cv.setUint16(4,20,true);cv.setUint16(6,20,true);cv.setUint32(16,crc,true);cv.setUint32(20,data.length,true);cv.setUint32(24,data.length,true);cv.setUint16(28,name.length,true);cv.setUint32(42,offset,true);ch.set(name,46);central.push(ch);offset+=lh.length+data.length;}const centralSize=central.reduce((n,x)=>n+x.length,0),end=new Uint8Array(22),v=new DataView(end.buffer);v.setUint32(0,0x06054b50,true);v.setUint16(8,files.length,true);v.setUint16(10,files.length,true);v.setUint32(12,centralSize,true);v.setUint32(16,offset,true);return new Blob([...local,...central,end],{type:'application/epub+zip'});}
-function epub(c){const uid=crypto.randomUUID(), enc=s=>esc(s), list=c.items;const manifest=list.map((p,i)=>`<item id="p${i}" href="p${i}.xhtml" media-type="application/xhtml+xml"/>`).join('');const spine=list.map((p,i)=>`<itemref idref="p${i}"/>`).join('');const children=parent=>list.filter(p=>(p.parentId||null)===parent);const navTree=parent=>children(parent).map(p=>{const i=list.indexOf(p), nested=navTree(p.id);return `<li><a href="p${i}.xhtml">${enc(p.title)}</a>${nested?`<ol>${nested}</ol>`:''}</li>`;}).join('');const files=[{name:'mimetype',data:'application/epub+zip'},{name:'META-INF/container.xml',data:'<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'},{name:'OEBPS/nav.xhtml',data:`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>${enc(c.title)}</title></head><body><nav epub:type="toc"><h1>${enc(c.title)}</h1><ol>${navTree(null)}</ol></nav></body></html>`},{name:'OEBPS/content.opf',data:`<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="ru"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:${uid}</dc:identifier><dc:title>${enc(c.title)}</dc:title><dc:language>ru</dc:language><meta property="dcterms:modified">${new Date().toISOString().slice(0,19)}Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>${manifest}</manifest><spine>${spine}</spine></package>`},...list.map((p,i)=>({name:`OEBPS/p${i}.xhtml`,data:`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ru"><head><title>${enc(p.title)}</title><meta charset="utf-8"/><style>body{font-family:serif;line-height:1.55}a{overflow-wrap:anywhere}.source{font-size:.85em;color:#555}pre{white-space:pre-wrap}</style></head><body><h1>${enc(p.title)}</h1><p class="source"><a href="${enc(p.url)}">${enc(p.url)}</a></p><pre>${enc(p.text||'')}</pre></body></html>`}))];return zip(files);}
+function epub(c){
+  const uid=crypto.randomUUID(), enc=s=>esc(s), list=c.items;
+  const manifest=list.map((p,i)=>`<item id="p${i}" href="p${i}.xhtml" media-type="application/xhtml+xml"/>`).join('');
+  const spine=list.map((p,i)=>`<itemref idref="p${i}"/>`).join('');
+  const children=parent=>list.filter(p=>(p.parentId||null)===parent);
+  const navTree=parent=>children(parent).map(p=>{const i=list.indexOf(p), nested=navTree(p.id);return `<li><a href="p${i}.xhtml">${enc(p.title)}</a>${nested?`<ol>${nested}</ol>`:''}</li>`;}).join('');
+  const files=[
+    {name:'mimetype',data:'application/epub+zip'},
+    {name:'META-INF/container.xml',data:'<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'},
+    {name:'OEBPS/nav.xhtml',data:`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>${enc(c.title)}</title></head><body><nav epub:type="toc"><h1>${enc(c.title)}</h1><ol>${navTree(null)}</ol></nav></body></html>`},
+    ...list.map((p,i)=>{
+      const assets=[];
+      const localizeDataImages=source=>source.replace(/data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)/gi,(match,mime,b64)=>{
+        const ext=({ 'image/jpeg':'jpg','image/svg+xml':'svg' })[mime.toLowerCase()]||mime.split('/')[1].split('+')[0];
+        const href=`images/p${i}-${assets.length}.${ext}`;
+        const binary=atob(b64), bytes=new Uint8Array(binary.length);
+        for(let n=0;n<binary.length;n++)bytes[n]=binary.charCodeAt(n);
+        assets.push({href,mime:mime.toLowerCase(),bytes});
+        return href;
+      });
+      const siteCss=(p.styles||[]).map(s=>s.css).filter(Boolean).join('\n');
+      // Rewrite CSS relative URLs to absolute source URLs. Embedded images remain data URIs.
+      let css=siteCss.replace(/url\((['"]?)(?!data:|https?:|\/|#)([^'"\)]+)\1\)/gi,(m,q,path)=>`url("${new URL(path,(p.styles||[]).find(s=>s.css.includes(m))?.href||p.url).href}")`);
+      css=localizeDataImages(css);
+      const body=localizeDataImages(p.html||`<pre>${enc(p.text||'')}</pre>`);
+      const assetItems=assets.map((a,n)=>`<item id="img${i}-${n}" href="${a.href}" media-type="${a.mime}"/>`).join('');
+      const xhtml=`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ru"><head><title>${enc(p.title)}</title><meta charset="utf-8"/><style>${enc(css.replace(/<\/style/gi,'<\\/style'))}</style><style>body{font-family:serif;line-height:1.55}img{max-width:100%;height:auto}a{overflow-wrap:anywhere}</style></head><body><header class="sitedoc-source"><h1>${enc(p.title)}</h1><p><a href="${enc(p.url)}">${enc(p.url)}</a></p></header><main>${body}</main></body></html>`;
+      return [{name:`OEBPS/p${i}.xhtml`,data:xhtml},...assets.map(a=>({name:`OEBPS/${a.href}`,data:a.bytes})),{name:`OEBPS/.manifest-${i}.xml`,data:assetItems}];
+    })
+  ].flat();
+  // Move image entries into the package manifest alongside each page.
+  const assetManifest=files.filter(f=>f.name.endsWith('.manifest.xml')).map(f=>f.data).join('');
+  const cleanFiles=files.filter(f=>!f.name.endsWith('.manifest.xml'));
+  cleanFiles.push({name:'OEBPS/content.opf',data:`<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="ru"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:${uid}</dc:identifier><dc:title>${enc(c.title)}</dc:title><dc:language>ru</dc:language><meta property="dcterms:modified">${new Date().toISOString().slice(0,19)}Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>${manifest}${assetManifest}</manifest><spine>${spine}</spine></package>`});
+  return zip(cleanFiles);
+}
 $('#exportEpub').onclick = async () => { const c = current(); if (!c?.items.length) return; const blob=epub(c), url=URL.createObjectURL(blob); await chrome.downloads.download({url,filename:`${c.title.replace(/[\\/:*?"<>|]/g,'_')}.epub`,saveAs:true}); setTimeout(()=>URL.revokeObjectURL(url),60000); };
 init();
