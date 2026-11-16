@@ -42,6 +42,20 @@
 .current-badge{font-size:9px}
 .popup .add-selected{margin:9px 0 0;padding:10px}
 .popup .add-selected:disabled{opacity:.55;cursor:not-allowed}
+.popup .add-selected.is-progress,
+.popup .add-selected.is-complete,
+.popup .add-selected.is-stopped{
+  opacity:1;
+  color:#17392d;
+  background:linear-gradient(90deg,#55a57d 0%,#55a57d var(--progress,0%),#e3ebe5 var(--progress,0%),#e3ebe5 100%);
+  transition:background .25s ease;
+}
+.popup .add-selected.is-progress:disabled,
+.popup .add-selected.is-complete:disabled,
+.popup .add-selected.is-stopped:disabled{opacity:1}
+.popup .add-selected.is-complete{color:#fff;background:linear-gradient(90deg,#216c55 0%,#216c55 100%);cursor:default}
+.popup .add-selected.is-stopped{color:#4b3510;background:linear-gradient(90deg,#e5b64b 0%,#e5b64b var(--progress,0%),#f2ead7 var(--progress,0%),#f2ead7 100%)}
+.popup .add-selected.is-scan{opacity:1;color:#3e5147;background:linear-gradient(90deg,#c9d8cf 0%,#c9d8cf 38%,#e8eeea 38%,#e8eeea 100%);cursor:wait}
 .popup .status{min-height:0;margin:10px 0 4px;padding:7px 9px;border-radius:7px;background:#eef4f0;color:#416754;font-size:11px}
 .popup .status:empty{display:none}
 .popup-footer{border-top:1px solid #e5ebe7;padding-top:10px;margin-top:10px}

@@ -8,6 +8,7 @@ const selectedCount = document.querySelector('#selectedCount');
 const createLibraryForm = document.querySelector('#createLibraryForm');
 let candidatePages = new Map();
 let collections = [];
+let activeJobState=null;
 const read = keys => chrome.storage.local.get(keys);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -45,16 +46,44 @@ function renderCandidates(items,currentUrl=''){
 
 function showJob(job){
   if(!job)return;
+  activeJobState=job;
   if(job.phase==='running'||job.phase==='starting'){
     status.textContent=job.type==='scan'?'Сканирую дерево страниц в фоне. Popup можно закрыть; результат появится здесь после повторного открытия.':`Сохраняю страницы в фоне: ${job.done||0} из ${job.total||0}. Popup можно закрыть.`;
-    addSelected.disabled=true;
   }else if(job.phase==='complete'){
     if(job.type==='scan'){
       const message=job.stopReason?`Сканирование остановлено ответом сервера (${job.stopReason}).`:`Сканирование завершено: проверено ${job.done} страниц.`;
       status.textContent=`${message} Отметьте страницы и нажмите «Добавить выбранные».`;
-      addSelected.disabled=false;
     }else status.textContent=`Сохранение завершено: добавлено ${job.added}, обновлено ${job.updated}${job.failed?`, ошибок ${job.failed}`:''}${job.stopReason?`. Остановлено по ответу сервера (${job.stopReason}).`:'.'}`;
-  }else if(job.phase==='error'){status.textContent=`Фоновая операция завершилась с ошибкой: ${job.error||'неизвестная ошибка'}`;addSelected.disabled=false;}
+  }else if(job.phase==='error')status.textContent=`Фоновая операция завершилась с ошибкой: ${job.error||'неизвестная ошибка'}`;
+  renderAddButton();
+}
+
+function renderAddButton(){
+  const checked=sectionList.querySelectorAll('input[type=checkbox]:checked').length;
+  const job=activeJobState;
+  addSelected.classList.remove('is-progress','is-complete','is-stopped','is-scan');
+  addSelected.style.setProperty('--progress','0%');
+  if(job?.type==='import'&&(job.phase==='running'||job.phase==='starting')){
+    const total=Math.max(1,Number(job.total)||checked),done=Math.min(total,Number(job.done)||0),percent=Math.round(done/total*100);
+    addSelected.classList.add('is-progress');addSelected.style.setProperty('--progress',`${percent}%`);
+    addSelected.textContent=`Сохранение страниц: ${done} из ${total}`;addSelected.disabled=true;return;
+  }
+  if(job?.type==='import'&&job.phase==='complete'){
+    const total=Math.max(1,Number(job.total)||checked),done=Math.min(total,Number(job.done)||0),percent=Math.round(done/total*100);
+    addSelected.classList.add(job.stopReason?'is-stopped':'is-complete');addSelected.style.setProperty('--progress',`${percent}%`);
+    addSelected.textContent=job.stopReason?`Остановлено: ${done} из ${total}`:job.failed?`Завершено с ошибками: ${done} из ${total}`:`Добавление завершено: ${done} из ${total}`;
+    addSelected.disabled=true;return;
+  }
+  if(job?.type==='import'&&job.phase==='error'){
+    const total=Math.max(1,Number(job.total)||checked),done=Math.min(total,Number(job.done)||0),percent=Math.round(done/total*100);
+    addSelected.classList.add('is-stopped');addSelected.style.setProperty('--progress',`${percent}%`);
+    addSelected.textContent=`Прервано: ${done} из ${total} · выполните новый поиск`;addSelected.disabled=true;return;
+  }
+  if(job?.type==='scan'&&(job.phase==='running'||job.phase==='starting')){
+    addSelected.classList.add('is-scan');addSelected.textContent='Сканирование раздела…';addSelected.disabled=true;return;
+  }
+  addSelected.textContent=checked?`Добавить выбранные (${checked})`:'Выберите страницы';
+  addSelected.disabled=checked===0;
 }
 
 chrome.storage.onChanged.addListener(async(changes,area)=>{
@@ -360,7 +389,7 @@ async function findSectionLinks() {
     if(!result.length){status.textContent='На этой странице не удалось прочитать текущий адрес.';return;}
     status.textContent=`Найдено ${result.length} страниц. Фоновый обход раздела продолжится, даже если закрыть popup…`;
     await chrome.storage.local.set({sectionCandidates:result,activeJob:{type:'scan',phase:'starting',tabId:tab.id,done:0,total:result.length,startedAt:Date.now()}});
-    chrome.runtime.sendMessage({type:'START_SECTION_SCAN',tabId:tab.id,items:result,selectedUrl:tab.url}).catch(error=>{status.textContent=`Не удалось запустить фоновое сканирование: ${error.message}`;});
+    chrome.runtime.sendMessage({type:'START_SECTION_SCAN',tabId:tab.id,items:result,selectedUrl:tab.url}).catch(error=>{activeJobState={type:'scan',phase:'error'};renderAddButton();status.textContent=`Не удалось запустить фоновое сканирование: ${error.message}`;void chrome.storage.local.set({activeJob:{type:'scan',phase:'error',error:error.message}});});
     renderCandidates(result,tab.url);
     status.textContent='Обход выполняется в фоне. Popup можно закрыть; откройте его снова, чтобы посмотреть результат.';
   }catch(e){status.textContent=`Не удалось прочитать раздел: ${e.message}`;}
@@ -382,7 +411,8 @@ async function fetchSelectedPages() {
     const existingUrls=new Set(collection.items.filter(item=>item.kind!=='section').map(item=>canonical(item.url)));
     const duplicateCount=descriptors.filter(item=>existingUrls.has(canonical(item.url))).length;
     const updateExisting=duplicateCount?confirm(`В библиотеке уже сохранено страниц из списка: ${duplicateCount}. Обновить эти копии?`):false;
-    chrome.runtime.sendMessage({type:'START_SECTION_IMPORT',tabId:tab.id,items:descriptors,collectionId:collection.id,updateExisting}).catch(error=>{status.textContent=`Не удалось запустить фоновое сохранение: ${error.message}`;});
+    activeJobState={type:'import',phase:'starting',done:0,total:descriptors.length};renderAddButton();
+    chrome.runtime.sendMessage({type:'START_SECTION_IMPORT',tabId:tab.id,items:descriptors,collectionId:collection.id,updateExisting}).catch(error=>{activeJobState={type:'import',phase:'error',done:0,total:descriptors.length};renderAddButton();status.textContent=`Не удалось запустить фоновое сохранение: ${error.message}`;void chrome.storage.local.set({activeJob:{type:'import',phase:'error',done:0,total:descriptors.length,error:error.message}});});
     status.textContent=`Сохранение ${descriptors.length} страниц выполняется в фоне. Popup можно закрыть.`;
   }catch(e){status.textContent=`Ошибка сбора раздела: ${e.message}`;addSelected.disabled=false;}
 }
@@ -394,8 +424,7 @@ function updateSelectionCount(){
   const boxes=[...sectionList.querySelectorAll('input[type=checkbox]')],checked=boxes.filter(x=>x.checked).length;
   selectedCount.textContent=`${checked} из ${boxes.length}`;
   selectAll.checked=checked===boxes.length;selectAll.indeterminate=checked>0&&checked<boxes.length;
-  addSelected.textContent=checked?`Добавить выбранные (${checked})`:'Выберите страницы';
-  addSelected.disabled=checked===0;
+  renderAddButton();
 }
 sectionList.addEventListener('change',updateSelectionCount);
 selectAll.addEventListener('change',e=>{sectionList.querySelectorAll('input[type=checkbox]').forEach(x=>x.checked=e.target.checked);updateSelectionCount();});
