@@ -200,10 +200,11 @@ function epub(c){
     const childContent=`${headingToc}${nested}`;
     return `<li><a href="p${i}.xhtml">${enc(p.title)}</a>${childContent?`<ol>${childContent}</ol>`:''}</li>`;
   }).join('');
+  const firstBodyPage=pages.length?`<a epub:type="bodymatter" href="p0.xhtml">${enc(pages[0].title)}</a>`:'';
   const files=[
     {name:'mimetype',data:'application/epub+zip'},
     {name:'META-INF/container.xml',data:'<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'},
-    {name:'OEBPS/nav.xhtml',data:`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>${enc(c.title)}</title></head><body><nav epub:type="toc"><h1>${enc(c.title)}</h1><ol>${navTree(null)}</ol></nav></body></html>`},
+    {name:'OEBPS/nav.xhtml',data:`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>${enc(c.title)}</title></head><body><nav epub:type="toc" id="toc"><h1>${enc(c.title)}</h1><ol>${navTree(null)}</ol></nav><nav epub:type="landmarks" hidden="hidden"><h2>Навигация</h2><ol><li><a epub:type="toc" href="nav.xhtml#toc">Содержание</a></li>${firstBodyPage?`<li>${firstBodyPage}</li>`:''}</ol></nav></body></html>`},
     ...pages.map((p,i)=>{
       const assets=[];
       const localizeDataImages=source=>source.replace(/data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)/gi,(match,mime,b64)=>{
@@ -220,7 +221,7 @@ function epub(c){
       css=localizeDataImages(css);
       const body=localizeDataImages(p.html||`<pre>${enc(p.text||'')}</pre>`);
       const assetItems=assets.map((a,n)=>`<item id="img${i}-${n}" href="${a.href}" media-type="${a.mime}"/>`).join('');
-      const xhtml=`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ru"><head><title>${enc(p.title)}</title><meta charset="utf-8"/><style>${enc(css.replace(/<\/style/gi,'<\\/style'))}</style><style>body{font-family:serif;line-height:1.55}img{max-width:100%;height:auto}a{overflow-wrap:anywhere}</style></head><body><header class="sitedoc-source"><h1>${enc(p.title)}</h1><p><a href="${enc(p.url)}">${enc(p.url)}</a></p></header><main>${body}</main></body></html>`;
+      const xhtml=`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ru"><head><title>${enc(p.title)}</title><meta charset="utf-8"/><style>${enc(css.replace(/<\/style/gi,'<\\/style'))}</style><style>html{font-size:100%;-webkit-text-size-adjust:100%}body{font-family:serif;font-size:1em;line-height:1.65;max-width:44em;margin:0 auto;padding:0 1em;overflow-wrap:anywhere}h1,h2,h3,h4,h5,h6{line-height:1.25;margin:1.4em 0 .55em;break-after:avoid}p,li,blockquote{orphans:2;widows:2}img,svg,video{max-width:100%;height:auto}img{width:auto;object-fit:contain;image-rendering:auto;display:block;margin:1em auto}figure{max-width:100%;margin:1.5em auto;text-align:center}figcaption{font-size:.9em;line-height:1.4}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}table{max-width:100%;border-collapse:collapse}a{overflow-wrap:anywhere}.sitedoc-source{margin-bottom:2em;padding-bottom:1em;border-bottom:1px solid #888}.sitedoc-source h1{margin-top:0;font-size:1.6em}.sitedoc-source p{font-size:.85em}</style></head><body><header class="sitedoc-source"><h1>${enc(p.title)}</h1><p><a href="${enc(p.url)}">${enc(p.url)}</a></p></header><main>${body}</main></body></html>`;
       return [{name:`OEBPS/p${i}.xhtml`,data:xhtml},...assets.map(a=>({name:`OEBPS/${a.href}`,data:a.bytes})),{name:`OEBPS/.manifest-${i}.xml`,data:assetItems}];
     })
   ].flat();
