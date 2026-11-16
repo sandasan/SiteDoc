@@ -256,20 +256,24 @@ async function findSectionLinks() {
         const primary=!!anchor.closest('.md-nav--primary,.md-sidebar--primary,.wy-nav-side,.wy-menu,[role="tree"]');
         const score=(active?100:0)+(primary?60:0)+(anchor.closest('.md-nav__list')?30:0)+Math.min(siblings.length,30);
         if(siblings.length&&score>(best?.score??-1)){
-          const ancestors=[],pendingSections=[];let parentUrl=null,parentTitle='',parentSections=[];let node=li.parentElement?.closest('li');
+          const ancestors=[],ancestorNodes=[];let node=li.parentElement?.closest('li');
           while(node){
             const label=node.querySelector(':scope > a, :scope > label, :scope > span, :scope > div > a, :scope > div > span');
             const text=(label?.innerText||label?.textContent||'').trim().replace(/\s+/g,' ');
             if(text&&text.length<120)ancestors.unshift({title:text,url:label.href||''});
-            if(!parentUrl&&label?.tagName==='A'&&valid(label)&&canonical(label.href)!==current){parentUrl=canonical(label.href);parentTitle=text;parentSections=pendingSections.slice().reverse();}
-            else if(!parentUrl&&text)pendingSections.push(text);
+            ancestorNodes.unshift({title:text,url:label?.href||'',isPage:label?.tagName==='A'&&valid(label)&&canonical(label.href)!==current});
             node=node.parentElement?.closest('li');
           }
-          best={links:siblings,crumbs:ancestors,score,list,parentUrl,parentTitle,parentSections};
+          best={links:siblings,crumbs:ancestors,ancestorNodes,score,list};
         }
       }
-      const basePath=(best?.crumbs?.length?best.crumbs:pageCrumbs).filter(crumb=>!best?.parentUrl||!crumb.url||canonical(crumb.url)!==best.parentUrl);
-      if(best?.parentTitle&&basePath[basePath.length-1]?.title===best.parentTitle)basePath.pop();
+      const ancestorPages=[],sectionBuffer=[];
+      for(const node of best?.ancestorNodes||[]){
+        if(node.isPage){ancestorPages.push({...node,parentSections:sectionBuffer.splice(0)});}
+        else if(node.title)sectionBuffer.push(node.title);
+      }
+      const basePath=ancestorPages.length?ancestorPages[0].parentSections.map(title=>({title,url:''})):(best?.crumbs?.length?best.crumbs:pageCrumbs);
+      const trailingSections=sectionBuffer;
       const scanList=(list,parentUrl=null,ancestorTitles=[],depth=0,parentTitle='',parentSections=[])=>{
         for(const item of [...list.children].filter(child=>child.tagName==='LI')){
           const link=[...item.querySelectorAll('a[href]')].find(a=>a.closest('ul,ol')===list&&valid(a));
@@ -289,8 +293,13 @@ async function findSectionLinks() {
           for(const childList of nested)scanList(childList,nextParent,nextTitles,nextDepth,nextParentTitle,nextSections);
         }
       };
-      if(best?.parentUrl)candidates.set(best.parentUrl,{url:best.parentUrl,title:best.parentTitle,breadcrumbs:basePath,navPath:basePath,parentUrl:null,parentTitle:'',parentSections:[],depth:0});
-      if(best?.list)scanList(best.list,best.parentUrl||null,best.parentTitle?[best.parentTitle]:[],best.parentUrl?1:0,best.parentTitle||'',best.parentSections||[]);
+      let parentUrl=null,parentTitle='',ancestorTitles=[],depth=0;
+      for(const ancestor of ancestorPages){
+        const navPath=[...basePath,...ancestorTitles.map(title=>({title,url:''})),...ancestor.parentSections.map(title=>({title,url:''}))];
+        candidates.set(ancestor.url,{url:ancestor.url,title:ancestor.title,breadcrumbs:basePath,navPath,parentUrl,parentTitle,parentSections:ancestor.parentSections,depth});
+        parentUrl=ancestor.url;parentTitle=ancestor.title;ancestorTitles=[...ancestorTitles,...ancestor.parentSections,ancestor.title];depth++;
+      }
+      if(best?.list)scanList(best.list,parentUrl,ancestorTitles,depth,parentTitle,trailingSections);
       // Fallback for sites without an explicit list-based navigation: use sibling URLs
       // from the current path directory, but keep this lower priority than the nav tree.
       if(!candidates.size){
@@ -302,7 +311,7 @@ async function findSectionLinks() {
         }
       }
       const siblingCount=candidates.size;
-      if(!candidates.has(current))candidates.set(current,{url:current,title:document.title||titleOf(currentLinks[0])||here.pathname.split('/').filter(Boolean).pop()||here.hostname,breadcrumbs:basePath,navPath:[...basePath,...(best?.parentTitle?[{title:best.parentTitle,url:best.parentUrl||''}]:[])],parentUrl:best?.parentUrl||null,parentTitle:best?.parentTitle||'',parentSections:best?.parentSections||[],depth:best?.parentUrl?1:0});
+      if(!candidates.has(current))candidates.set(current,{url:current,title:document.title||titleOf(currentLinks[0])||here.pathname.split('/').filter(Boolean).pop()||here.hostname,breadcrumbs:basePath,navPath:[...basePath,...ancestorTitles.map(title=>({title,url:''})),...trailingSections.map(title=>({title,url:''}))],parentUrl,parentTitle,parentSections:trailingSections,depth});
       return {items:[...candidates.values()],siblingCount};
     }});
     const result=injection?.result?.items||[];
@@ -326,7 +335,7 @@ async function findSectionLinks() {
 async function fetchSelectedPages() {
     const urls=[...sectionList.querySelectorAll('input:checked')].map(input=>input.value);
   if(!urls.length){status.textContent='Выберите хотя бы одну страницу.';return;}
-  status.textContent=`Добавляю ${urls.length} страниц…`;
+  status.textContent=`Добавляю ${urls.length} страниц последовательно…`;
   addSelected.disabled=true;
   try{
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
@@ -338,34 +347,53 @@ async function fetchSelectedPages() {
     const duplicateCount=descriptors.filter(item=>existingUrls.has(canonical(item.url))).length;
     const updateExisting=duplicateCount?confirm(`В библиотеке уже сохранено страниц из списка: ${duplicateCount}. Обновить эти копии?`):false;
     let added=0,updated=0,failed=0;
+    let stoppedReason='';
     const batchSize=5;
     for(let offset=0;offset<descriptors.length;offset+=batchSize){
       const batch=descriptors.slice(offset,offset+batchSize);
       const end=Math.min(offset+batch.length,descriptors.length);
       status.textContent=`Загружаю страницы ${offset+1}–${end} из ${descriptors.length}…`;
       try{
+        if(offset)await new Promise(resolve=>setTimeout(resolve,1000));
         const [injection]=await chrome.scripting.executeScript({target:{tabId:tab.id},args:[batch],func:async descriptors=>{
       const output=[];
+      let stopReason='';
+      const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+      let lastRequestAt=0;
+      const politeFetch=async(...args)=>{
+        if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));
+        const response=await fetch(...args);lastRequestAt=Date.now();return response;
+      };
       for(const descriptor of descriptors){
         const {url}=descriptor;
         try{
-          const response=await fetch(url,{credentials:'include'}); if(!response.ok)throw new Error(`HTTP ${response.status}`);
+          const response=await politeFetch(url,{credentials:'include'});
+          if([401,403,429,503].includes(response.status)){
+            stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;
+            output.push({url,error:`Server requested a stop (${stopReason})`,stopped:true});
+            break;
+          }
+          if(!response.ok)throw new Error(`HTTP ${response.status}`);
           const source=await response.text(), doc=new DOMParser().parseFromString(source,'text/html');
           const root=doc.querySelector('main,article,[role="main"]')||doc.body;
           const copy=root.cloneNode(true); copy.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,button,[role="navigation"]').forEach(n=>n.remove());
           let assetBytes=0;
           const dataUrl=async source=>{
             try{
-              const response=await fetch(source,{credentials:'include'});if(!response.ok)return null;
+              await pause(250);
+              const response=await politeFetch(source,{credentials:'include'});
+              if([401,403,429,503].includes(response.status)){stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;return null;}
+              if(!response.ok)return null;
               const blob=await response.blob();if(assetBytes+blob.size>2_000_000)return null;assetBytes+=blob.size;
               return await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>resolve(null);reader.readAsDataURL(blob);});
             }catch{return null;}
           };
-          await Promise.all([...copy.querySelectorAll('img')].map(async image=>{
-            const raw=image.getAttribute('src')||image.getAttribute('data-src')||image.getAttribute('data-original');if(!raw)return;
+          for(const image of copy.querySelectorAll('img')){
+            const raw=image.getAttribute('src')||image.getAttribute('data-src')||image.getAttribute('data-original');if(!raw)continue;
             const absolute=new URL(raw,url).href;image.setAttribute('src',absolute);image.removeAttribute('srcset');
             const embedded=await dataUrl(absolute);if(embedded)image.setAttribute('src',embedded);
-          }));
+            if(stopReason)break;
+          }
           const headings=[...copy.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((h,i)=>{if(!h.id)h.id=`sitedoc-heading-${i+1}`;return{id:h.id,title:(h.textContent||'').trim(),level:Number(h.tagName.slice(1))};}).filter(h=>h.title);
           const crumbs=doc.querySelector('[aria-label*="breadcrumb" i],.breadcrumb,.breadcrumbs');
           const breadcrumbs=crumbs?[...crumbs.querySelectorAll('a,[aria-current="page"]')].map(a=>({title:(a.textContent||'').trim(),url:a.href})).filter(x=>x.title):[];
@@ -373,32 +401,38 @@ async function fetchSelectedPages() {
           const styleLinks=[...doc.querySelectorAll('link[rel="stylesheet"][href]')].slice(0,10);
           const styles=[...doc.querySelectorAll('style')].map(style=>({href:url,css:style.textContent||''}));
           for(const link of styleLinks){
+            if(stopReason)break;
             const href=new URL(link.getAttribute('href'),url).href;
             try{
-              const response=await fetch(href,{credentials:'include'});if(!response.ok)throw new Error('stylesheet fetch failed');
+              const response=await politeFetch(href,{credentials:'include'});
+              if([401,403,429,503].includes(response.status)){stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;throw new Error('server requested a stop');}
+              if(!response.ok)throw new Error('stylesheet fetch failed');
               let css=(await response.text()).slice(0,300_000);
               const resources=[...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/gi)].map(m=>m[1]).filter(src=>!src.startsWith('data:')&&!src.startsWith('#')))];
-              for(const src of resources){const absolute=new URL(src,href).href;const embedded=await dataUrl(absolute);css=css.split(src).join(embedded||absolute);}
+              for(const src of resources){const absolute=new URL(src,href).href;const embedded=await dataUrl(absolute);css=css.split(src).join(embedded||absolute);if(stopReason)break;}
               styles.push({href,css});
             }catch{styles.push({href,css:`@import url("${href.replaceAll('"','%22')}");`});}
+            if(stopReason)break;
           }
           output.push({title,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath:descriptor.navPath||descriptor.breadcrumbs||[],parentUrl:descriptor.parentUrl||null,parentSections:descriptor.parentSections||[],styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname});
+          if(stopReason)break;
         }catch(error){output.push({url,error:error.message});}
       }
-      return output;
+      return {pages:output,stopReason};
         }});
-        const pages=injection?.result||[];
+        const pages=injection?.result?.pages||[];
         for(const page of pages){
           if(page.error){failed++;continue;}
           const outcome=saveToCollection(collection,page,updateExisting);
           if(outcome==='added')added++;else if(outcome==='updated')updated++;
         }
-        failed+=Math.max(0,batch.length-pages.length);
+        if(!injection?.result?.stopReason)failed+=Math.max(0,batch.length-pages.length);
         await chrome.storage.local.set({collections});
+        if(injection?.result?.stopReason){stoppedReason=injection.result.stopReason;break;}
       }catch(error){failed+=batch.length;status.textContent=`Партия ${offset+1}–${end} не загрузилась: ${error.message}`;}
     }
-    preview.hidden=true;addSelected.hidden=true;
-    status.textContent=`Готово: добавлено ${added}, обновлено ${updated}${failed?`, ошибок ${failed}`:''}.`;
+    preview.hidden=!!stoppedReason;addSelected.hidden=!!stoppedReason;
+    status.textContent=stoppedReason?`Сбор остановлен по ответу сервера (${stoppedReason}). Больше запросов не отправлял. Добавлено ${added}, обновлено ${updated}.`:`Готово: добавлено ${added}, обновлено ${updated}${failed?`, ошибок ${failed}`:''}.`;
   }catch(e){status.textContent=`Ошибка сбора раздела: ${e.message}`;}
   finally{addSelected.disabled=false;}
 }
