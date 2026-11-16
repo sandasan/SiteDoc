@@ -314,8 +314,56 @@ async function findSectionLinks() {
       if(!candidates.has(current))candidates.set(current,{url:current,title:document.title||titleOf(currentLinks[0])||here.pathname.split('/').filter(Boolean).pop()||here.hostname,breadcrumbs:basePath,navPath:[...basePath,...ancestorTitles.map(title=>({title,url:''})),...trailingSections.map(title=>({title,url:''}))],parentUrl,parentTitle,parentSections:trailingSections,depth});
       return {items:[...candidates.values()],siblingCount};
     }});
-    const result=injection?.result?.items||[];
+    let result=injection?.result?.items||[];
     if(!result.length){status.textContent='На этой странице не удалось прочитать текущий адрес.';return;}
+    status.textContent=`Найдено ${result.length} страниц. Проверяю вложенные страницы раздела…`;
+    const [crawl]=await chrome.scripting.executeScript({target:{tabId:tab.id},args:[result,tab.url],func:async (initialItems,selectedUrl)=>{
+      const canonical=value=>{try{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return value;}};
+      const items=new Map(initialItems.map(item=>[canonical(item.url),{...item,url:canonical(item.url)}]));
+      const current=items.get(canonical(selectedUrl));
+      const startDepth=Number(current?.depth)||0;
+      const queue=[...items.values()].filter(item=>(Number(item.depth)||0)>=startDepth);
+      const visited=new Set();let lastRequestAt=0,stopReason='';
+      const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+      const politeFetch=async url=>{if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));const response=await fetch(url,{credentials:'include'});lastRequestAt=Date.now();return response;};
+      const titleOf=a=>(a.textContent||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
+      while(queue.length&&visited.size<2000&&!stopReason){
+        const parent=queue.shift(),key=canonical(parent.url);if(visited.has(key))continue;visited.add(key);
+        try{
+          const response=await politeFetch(key);
+          if([401,403,429,503].includes(response.status)){stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;break;}
+          if(!response.ok)continue;
+          const source=await response.text();parent.source=source;
+          const doc=new DOMParser().parseFromString(source,'text/html');
+          const anchors=[...doc.querySelectorAll('a[href]')].filter(a=>{try{return new URL(a.href).origin===new URL(key).origin&&canonical(a.href)===key;}catch{return false;}});
+          let active=null;
+          for(const anchor of anchors){const li=anchor.closest('li');if(li&&(!active||li.querySelectorAll('a[href]').length>active.querySelectorAll('a[href]').length))active=li;}
+          if(!active)continue;
+          const walk=(node,parentUrl,parentTitle,parentSections,depth)=>{
+            for(const child of [...node.children]){
+              if(child.tagName!=='LI')continue;
+              const direct=[...child.querySelectorAll(':scope > a[href],:scope > div > a[href],:scope > p > a[href]')].find(a=>{try{return new URL(a.href).origin===new URL(key).origin;}catch{return false;}});
+              let nextUrl=parentUrl,nextTitle=parentTitle,nextSections=parentSections,nextDepth=depth;
+              if(direct){
+                const url=canonical(direct.href),title=titleOf(direct);
+                if(title&&url!==parentUrl&&!items.has(url)){
+                  const descriptor={url,title,breadcrumbs:parent.breadcrumbs||[],navPath:[...(parent.navPath||parent.breadcrumbs||[]),{title:parent.title,url:parent.url},...parentSections.map(title=>({title,url:''}))],parentUrl,parentTitle,parentSections,depth:depth+1};
+                  items.set(url,descriptor);queue.push(descriptor);
+                }
+                if(title){nextUrl=canonical(direct.href);nextTitle=title;nextSections=[];nextDepth=depth+1;}
+              }else{
+                const label=child.querySelector(':scope > label,:scope > span,:scope > div > span');const section=(label?.textContent||'').trim().replace(/\s+/g,' ');
+                if(section){nextSections=[...parentSections,section];nextDepth=depth+1;}
+              }
+              for(const nested of [...child.children].filter(el=>['UL','OL'].includes(el.tagName)))walk(nested,nextUrl,nextTitle,nextSections,nextDepth);
+            }
+          };
+          for(const nested of [...active.children].filter(el=>['UL','OL'].includes(el.tagName)))walk(nested,key,parent.title,parent.parentSections||[],(Number(parent.depth)||0)+1);
+        }catch{}
+      }
+      return {items:[...items.values()],stopReason,visited:visited.size};
+    }});
+    result=crawl?.result?.items||result;
     candidatePages=new Map(result.map(item=>[item.url,item]));
     const context=result.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Группа страниц из меню сайта';
     document.querySelector('#sectionContext').textContent=context;
@@ -328,7 +376,7 @@ async function findSectionLinks() {
     }).join('');
     selectAll.checked=true;selectAll.indeterminate=false;updateSelectionCount();
     preview.hidden=false; addSelected.hidden=false;
-    status.textContent=injection.result.siblingCount===0?'Соседние страницы не найдены; текущую страницу всё равно можно добавить.':'Отметьте страницы, которые хотите сохранить. Текущая страница тоже включена.';
+    status.textContent=crawl?.result?.stopReason?`Обход остановлен по ответу сервера (${crawl.result.stopReason}); показана уже найденная часть дерева.`:`Найдено ${result.length} страниц на ${crawl?.result?.visited||0} проверенных страницах. Отметьте страницы для сохранения.`;
   }catch(e){status.textContent=`Не удалось прочитать раздел: ${e.message}`;}
 }
 
@@ -367,14 +415,18 @@ async function fetchSelectedPages() {
       for(const descriptor of descriptors){
         const {url}=descriptor;
         try{
-          const response=await politeFetch(url,{credentials:'include'});
-          if([401,403,429,503].includes(response.status)){
-            stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;
-            output.push({url,error:`Server requested a stop (${stopReason})`,stopped:true});
-            break;
+          let source=descriptor.source;
+          if(!source){
+            const response=await politeFetch(url,{credentials:'include'});
+            if([401,403,429,503].includes(response.status)){
+              stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;
+              output.push({url,error:`Server requested a stop (${stopReason})`,stopped:true});
+              break;
+            }
+            if(!response.ok)throw new Error(`HTTP ${response.status}`);
+            source=await response.text();
           }
-          if(!response.ok)throw new Error(`HTTP ${response.status}`);
-          const source=await response.text(), doc=new DOMParser().parseFromString(source,'text/html');
+          const doc=new DOMParser().parseFromString(source,'text/html');
           const root=doc.querySelector('main,article,[role="main"]')||doc.body;
           const copy=root.cloneNode(true); copy.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,button,[role="navigation"]').forEach(n=>n.remove());
           let assetBytes=0;
