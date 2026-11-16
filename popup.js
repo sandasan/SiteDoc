@@ -3,6 +3,7 @@ const status = document.querySelector('#status');
 const preview = document.querySelector('#sectionPreview');
 const sectionList = document.querySelector('#sectionLinks');
 const addSelected = document.querySelector('#addSelected');
+let candidatePages = new Map();
 const read = keys => chrome.storage.local.get(keys);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -23,7 +24,8 @@ function normalizeUrl(value) {
 }
 
 function placeByBreadcrumbs(collection, data) {
-  const crumbs = (data.breadcrumbs || []).filter(x => x && x.title && x.title.toLowerCase() !== 'home');
+  const pageUrl=normalizeUrl(data.url);
+  const crumbs = (data.breadcrumbs || []).filter(x => x && x.title && x.title.toLowerCase() !== 'home' && (!x.url || normalizeUrl(x.url)!==pageUrl)).filter((x,i,a)=>i===0||x.title.toLowerCase()!==a[i-1].title.toLowerCase());
   if (crumbs.length && crumbs[crumbs.length - 1].title.toLowerCase() === data.title.toLowerCase()) crumbs.pop();
   let parentId = null;
   for (const crumb of crumbs) {
@@ -107,27 +109,59 @@ async function saveCurrent() {
 }
 
 async function findSectionLinks() {
-  status.textContent='Ищу страницы в текущем разделе…';
+    status.textContent='Ищу соседние страницы в меню документации…';
   try {
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
     const [result]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>{
-      const here=new URL(location.href);
-      const directory=here.pathname.slice(0,here.pathname.lastIndexOf('/')+1);
-      const candidates=new Map();
-      for(const a of document.querySelectorAll('a[href]')){
-        try{
-          const url=new URL(a.href); if(url.origin!==here.origin)continue; url.hash='';
-          if(url.pathname===here.pathname||!url.pathname.startsWith(directory))continue;
-          if(/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(url.pathname))continue;
-          const title=(a.innerText||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
-          if(title.length<2)continue;
-          const key=url.href.replace(/\/$/,''); if(!candidates.has(key))candidates.set(key,{url:key,title});
-        }catch{}
+      const here=new URL(location.href), canonical=value=>{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;};
+      const current=canonical(location.href), candidates=new Map();
+      const titleOf=a=>(a.innerText||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
+      const valid=(a)=>{try{const u=new URL(a.href);return u.origin===here.origin&&!/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(u.pathname);}catch{return false;}};
+      const currentLinks=[...document.querySelectorAll('a[href]')].filter(a=>valid(a)&&canonical(a.href)===current);
+      const crumbNav=document.querySelector('[aria-label*="breadcrumb" i],.breadcrumb,.breadcrumbs');
+      let pageCrumbs=crumbNav?[...crumbNav.querySelectorAll('a,[aria-current="page"]')].map(a=>({title:titleOf(a),url:a.href})).filter(x=>x.title):[];
+      let best=null;
+      for(const anchor of currentLinks){
+        const li=anchor.closest('li'); if(!li)continue;
+        const list=li.parentElement; if(!list||!['UL','OL'].includes(list.tagName))continue;
+        const siblings=[...list.children].filter(child=>child.tagName==='LI').map(item=>{
+          const links=[...item.querySelectorAll('a[href]')].filter(a=>a.closest('ul,ol')===list);
+          return links[0]?{item,link:links[0]}:null;
+        }).filter(Boolean).filter(x=>valid(x.link)&&canonical(x.link.href)!==current);
+        const active=anchor.matches('[aria-current="page"],.md-nav__link--active,.active,.current');
+        const primary=!!anchor.closest('.md-nav--primary,.md-sidebar--primary,.wy-nav-side,.wy-menu,[role="tree"]');
+        const score=(active?100:0)+(primary?60:0)+(anchor.closest('.md-nav__list')?30:0)+Math.min(siblings.length,30);
+        if(siblings.length&&score>(best?.score??-1)){
+          const ancestors=[];let node=li.parentElement?.closest('li');
+          while(node){
+            const label=node.querySelector(':scope > a, :scope > label, :scope > span, :scope > div > a, :scope > div > span');
+            const text=(label?.innerText||label?.textContent||'').trim().replace(/\s+/g,' ');
+            if(text&&text.length<120)ancestors.unshift({title:text,url:label.href||''});
+            node=node.parentElement?.closest('li');
+          }
+          best={links:siblings,crumbs:ancestors,score};
+        }
+      }
+      const chosen=best?.links||[];
+      for(const {link} of chosen){
+        const url=canonical(link.href),title=titleOf(link);if(title.length>1)candidates.set(url,{url,title,breadcrumbs:best?.crumbs?.length?best.crumbs:pageCrumbs});
+      }
+      if(best)candidates.set(current,{url:current,title:document.title||titleOf(currentLinks[0]),breadcrumbs:best.crumbs.length?best.crumbs:pageCrumbs});
+      // Fallback for sites without an explicit list-based navigation: use sibling URLs
+      // from the current path directory, but keep this lower priority than the nav tree.
+      if(!candidates.size){
+        const directory=here.pathname.slice(0,here.pathname.lastIndexOf('/')+1);
+        for(const a of document.querySelectorAll('a[href]')){
+          if(!valid(a))continue;const url=canonical(a.href),u=new URL(url);
+          if(url===current||!u.pathname.startsWith(directory))continue;
+          const title=titleOf(a);if(title.length>1&&!candidates.has(url))candidates.set(url,{url,title,breadcrumbs:pageCrumbs});
+        }
       }
       return [...candidates.values()].slice(0,30);
     }});
-    if(!result?.length){status.textContent='Не нашёл ссылок в папке этой страницы.';return;}
-    sectionList.innerHTML=result.map((item,i)=>`<label class="section-link"><input type="checkbox" value="${esc(item.url)}" checked><span>${esc(item.title)}<small>${esc(item.url)}</small></span></label>`).join('');
+    if(!result?.length){status.textContent='Не нашёл соседние страницы в меню или папке URL.';return;}
+    candidatePages=new Map(result.map(item=>[item.url,item]));
+    sectionList.innerHTML=result.map(item=>`<label class="section-link"><input type="checkbox" value="${esc(item.url)}" checked><span>${esc(item.title)}<small>${esc([...(item.breadcrumbs||[]).map(x=>x.title),item.url].filter(Boolean).join(' › '))}</small></span></label>`).join('');
     preview.hidden=false; addSelected.hidden=false;
     status.textContent=`Найдено страниц: ${result.length} (максимум 30). Проверьте список перед добавлением.`;
   }catch(e){status.textContent=`Не удалось прочитать раздел: ${e.message}`;}
@@ -140,9 +174,11 @@ async function fetchSelectedPages() {
   addSelected.disabled=true;
   try{
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
-    const [result]=await chrome.scripting.executeScript({target:{tabId:tab.id},args:[urls],func:async urls=>{
+    const descriptors=[...sectionList.querySelectorAll('input:checked')].slice(0,30).map(input=>({url:input.value,...(candidatePages.get(input.value)||{})}));
+    const [result]=await chrome.scripting.executeScript({target:{tabId:tab.id},args:[descriptors],func:async descriptors=>{
       const output=[];
-      for(const url of urls){
+      for(const descriptor of descriptors){
+        const {url}=descriptor;
         try{
           const response=await fetch(url,{credentials:'include'}); if(!response.ok)throw new Error(`HTTP ${response.status}`);
           const source=await response.text(), doc=new DOMParser().parseFromString(source,'text/html');
@@ -177,7 +213,7 @@ async function fetchSelectedPages() {
               styles.push({href,css});
             }catch{styles.push({href,css:`@import url("${href.replaceAll('"','%22')}");`});}
           }
-          output.push({title,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname});
+          output.push({title,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs:descriptor.breadcrumbs?.length?descriptor.breadcrumbs:breadcrumbs,styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname});
         }catch(error){output.push({url,error:error.message});}
       }
       return output;
