@@ -12,7 +12,7 @@ const read = keys => chrome.storage.local.get(keys);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function init() {
-  const saved = await read(['collections', 'selectedCollectionId']);
+  const saved = await read(['collections', 'selectedCollectionId','sectionCandidates','activeJob']);
   collections = Array.isArray(saved.collections) ? saved.collections : [];
   if (!Array.isArray(saved.collections)) {
     const first = { id: crypto.randomUUID(), title: 'Моя библиотека', items: [] };
@@ -23,7 +23,49 @@ async function init() {
   const selectedId = collections.some(c => c.id === saved.selectedCollectionId) ? saved.selectedCollectionId : collections[0]?.id;
   renderLibrarySelect(selectedId);
   if (selectedId && selectedId !== saved.selectedCollectionId) await chrome.storage.local.set({ selectedCollectionId: selectedId });
+  if(saved.sectionCandidates?.length){
+    candidatePages=new Map(saved.sectionCandidates.map(item=>[item.url,item]));
+    const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+    renderCandidates(saved.sectionCandidates,tab?.url||'');
+  }
+  showJob(saved.activeJob);
 }
+
+function renderCandidates(items,currentUrl=''){
+  candidatePages=new Map(items.map(item=>[item.url,item]));
+  const context=items.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Группа страниц из меню сайта';
+  document.querySelector('#sectionContext').textContent=context;
+  document.querySelector('#resultCount').textContent=items.length;
+  sectionList.innerHTML=items.map(item=>{
+    const isCurrent=currentUrl&&normalizeUrl(item.url)===normalizeUrl(currentUrl),path=new URL(item.url).pathname,depth=Math.min(8,Math.max(0,Number(item.depth)||0));
+    return `<label class="section-link ${isCurrent?'is-current':''} ${depth?'is-descendant':''}" style="--depth:${depth}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>`;
+  }).join('');
+  selectAll.checked=true;selectAll.indeterminate=false;updateSelectionCount();preview.hidden=false;addSelected.hidden=false;
+}
+
+function showJob(job){
+  if(!job)return;
+  if(job.phase==='running'||job.phase==='starting'){
+    status.textContent=job.type==='scan'?'Сканирую дерево страниц в фоне. Popup можно закрыть; результат появится здесь после повторного открытия.':`Сохраняю страницы в фоне: ${job.done||0} из ${job.total||0}. Popup можно закрыть.`;
+    addSelected.disabled=true;
+  }else if(job.phase==='complete'){
+    if(job.type==='scan'){
+      const message=job.stopReason?`Сканирование остановлено ответом сервера (${job.stopReason}).`:`Сканирование завершено: проверено ${job.done} страниц.`;
+      status.textContent=`${message} Отметьте страницы и нажмите «Добавить выбранные».`;
+      addSelected.disabled=false;
+    }else status.textContent=`Сохранение завершено: добавлено ${job.added}, обновлено ${job.updated}${job.failed?`, ошибок ${job.failed}`:''}${job.stopReason?`. Остановлено по ответу сервера (${job.stopReason}).`:'.'}`;
+  }else if(job.phase==='error'){status.textContent=`Фоновая операция завершилась с ошибкой: ${job.error||'неизвестная ошибка'}`;addSelected.disabled=false;}
+}
+
+chrome.storage.onChanged.addListener(async(changes,area)=>{
+  if(area!=='local')return;
+  if(changes.sectionCandidates?.newValue){
+    candidatePages=new Map(changes.sectionCandidates.newValue.map(item=>[item.url,item]));
+    const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+    renderCandidates(changes.sectionCandidates.newValue,tab?.url||'');
+  }
+  if(changes.activeJob)showJob(changes.activeJob.newValue);
+});
 
 function renderLibrarySelect(selectedId) {
   if (!collections.length) {
@@ -316,77 +358,23 @@ async function findSectionLinks() {
     }});
     let result=injection?.result?.items||[];
     if(!result.length){status.textContent='На этой странице не удалось прочитать текущий адрес.';return;}
-    status.textContent=`Найдено ${result.length} страниц. Проверяю вложенные страницы раздела…`;
-    const [crawl]=await chrome.scripting.executeScript({target:{tabId:tab.id},args:[result,tab.url],func:async (initialItems,selectedUrl)=>{
-      const canonical=value=>{try{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return value;}};
-      const items=new Map(initialItems.map(item=>[canonical(item.url),{...item,url:canonical(item.url)}]));
-      const current=items.get(canonical(selectedUrl));
-      const startDepth=Number(current?.depth)||0;
-      const queue=[...items.values()].filter(item=>(Number(item.depth)||0)>=startDepth);
-      const visited=new Set();let lastRequestAt=0,stopReason='';
-      const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-      const politeFetch=async url=>{if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));const response=await fetch(url,{credentials:'include'});lastRequestAt=Date.now();return response;};
-      const titleOf=a=>(a.textContent||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
-      while(queue.length&&visited.size<2000&&!stopReason){
-        const parent=queue.shift(),key=canonical(parent.url);if(visited.has(key))continue;visited.add(key);
-        try{
-          const response=await politeFetch(key);
-          if([401,403,429,503].includes(response.status)){stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;break;}
-          if(!response.ok)continue;
-          const source=await response.text();parent.source=source;
-          const doc=new DOMParser().parseFromString(source,'text/html');
-          const anchors=[...doc.querySelectorAll('a[href]')].filter(a=>{try{return new URL(a.href).origin===new URL(key).origin&&canonical(a.href)===key;}catch{return false;}});
-          let active=null;
-          for(const anchor of anchors){const li=anchor.closest('li');if(li&&(!active||li.querySelectorAll('a[href]').length>active.querySelectorAll('a[href]').length))active=li;}
-          if(!active)continue;
-          const walk=(node,parentUrl,parentTitle,parentSections,depth)=>{
-            for(const child of [...node.children]){
-              if(child.tagName!=='LI')continue;
-              const direct=[...child.querySelectorAll(':scope > a[href],:scope > div > a[href],:scope > p > a[href]')].find(a=>{try{return new URL(a.href).origin===new URL(key).origin;}catch{return false;}});
-              let nextUrl=parentUrl,nextTitle=parentTitle,nextSections=parentSections,nextDepth=depth;
-              if(direct){
-                const url=canonical(direct.href),title=titleOf(direct);
-                if(title&&url!==parentUrl&&!items.has(url)){
-                  const descriptor={url,title,breadcrumbs:parent.breadcrumbs||[],navPath:[...(parent.navPath||parent.breadcrumbs||[]),{title:parent.title,url:parent.url},...parentSections.map(title=>({title,url:''}))],parentUrl,parentTitle,parentSections,depth:depth+1};
-                  items.set(url,descriptor);queue.push(descriptor);
-                }
-                if(title){nextUrl=canonical(direct.href);nextTitle=title;nextSections=[];nextDepth=depth+1;}
-              }else{
-                const label=child.querySelector(':scope > label,:scope > span,:scope > div > span');const section=(label?.textContent||'').trim().replace(/\s+/g,' ');
-                if(section){nextSections=[...parentSections,section];nextDepth=depth+1;}
-              }
-              for(const nested of [...child.children].filter(el=>['UL','OL'].includes(el.tagName)))walk(nested,nextUrl,nextTitle,nextSections,nextDepth);
-            }
-          };
-          for(const nested of [...active.children].filter(el=>['UL','OL'].includes(el.tagName)))walk(nested,key,parent.title,parent.parentSections||[],(Number(parent.depth)||0)+1);
-        }catch{}
-      }
-      return {items:[...items.values()],stopReason,visited:visited.size};
-    }});
-    result=crawl?.result?.items||result;
-    candidatePages=new Map(result.map(item=>[item.url,item]));
-    const context=result.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Группа страниц из меню сайта';
-    document.querySelector('#sectionContext').textContent=context;
-    document.querySelector('#resultCount').textContent=result.length;
-    sectionList.innerHTML=result.map(item=>{
-      const isCurrent=normalizeUrl(item.url)===normalizeUrl(tab.url);
-      const path=new URL(item.url).pathname;
-      const depth=Math.min(8,Math.max(0,Number(item.depth)||0));
-      return `<label class="section-link ${isCurrent?'is-current':''} ${depth?'is-descendant':''}" style="--depth:${depth}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>`;
-    }).join('');
-    selectAll.checked=true;selectAll.indeterminate=false;updateSelectionCount();
-    preview.hidden=false; addSelected.hidden=false;
-    status.textContent=crawl?.result?.stopReason?`Обход остановлен по ответу сервера (${crawl.result.stopReason}); показана уже найденная часть дерева.`:`Найдено ${result.length} страниц на ${crawl?.result?.visited||0} проверенных страницах. Отметьте страницы для сохранения.`;
+    status.textContent=`Найдено ${result.length} страниц. Фоновый обход раздела продолжится, даже если закрыть popup…`;
+    await chrome.storage.local.set({sectionCandidates:result,activeJob:{type:'scan',phase:'starting',tabId:tab.id,done:0,total:result.length,startedAt:Date.now()}});
+    chrome.runtime.sendMessage({type:'START_SECTION_SCAN',tabId:tab.id,items:result,selectedUrl:tab.url}).catch(error=>{status.textContent=`Не удалось запустить фоновое сканирование: ${error.message}`;});
+    renderCandidates(result,tab.url);
+    status.textContent='Обход выполняется в фоне. Popup можно закрыть; откройте его снова, чтобы посмотреть результат.';
   }catch(e){status.textContent=`Не удалось прочитать раздел: ${e.message}`;}
 }
 
 async function fetchSelectedPages() {
-    const urls=[...sectionList.querySelectorAll('input:checked')].map(input=>input.value);
+  const urls=[...sectionList.querySelectorAll('input:checked')].map(input=>input.value);
   if(!urls.length){status.textContent='Выберите хотя бы одну страницу.';return;}
-  status.textContent=`Добавляю ${urls.length} страниц последовательно…`;
   addSelected.disabled=true;
   try{
-    const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+    const savedJob=(await read(['activeJob'])).activeJob;
+    let tab;
+    try{tab=savedJob?.tabId?await chrome.tabs.get(savedJob.tabId):null;}catch{}
+    if(!tab)[tab]=await chrome.tabs.query({active:true,currentWindow:true});
     const descriptors=[...sectionList.querySelectorAll('input:checked')].map(input=>({url:input.value,...(candidatePages.get(input.value)||{})}));
     const {collections=[]}=await read(['collections']);
     const collection=collections.find(c=>c.id===select.value);if(!collection)throw new Error('Выбранная библиотека больше не существует.');
@@ -394,99 +382,9 @@ async function fetchSelectedPages() {
     const existingUrls=new Set(collection.items.filter(item=>item.kind!=='section').map(item=>canonical(item.url)));
     const duplicateCount=descriptors.filter(item=>existingUrls.has(canonical(item.url))).length;
     const updateExisting=duplicateCount?confirm(`В библиотеке уже сохранено страниц из списка: ${duplicateCount}. Обновить эти копии?`):false;
-    let added=0,updated=0,failed=0;
-    let stoppedReason='';
-    const batchSize=5;
-    for(let offset=0;offset<descriptors.length;offset+=batchSize){
-      const batch=descriptors.slice(offset,offset+batchSize);
-      const end=Math.min(offset+batch.length,descriptors.length);
-      status.textContent=`Загружаю страницы ${offset+1}–${end} из ${descriptors.length}…`;
-      try{
-        if(offset)await new Promise(resolve=>setTimeout(resolve,1000));
-        const [injection]=await chrome.scripting.executeScript({target:{tabId:tab.id},args:[batch],func:async descriptors=>{
-      const output=[];
-      let stopReason='';
-      const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-      let lastRequestAt=0;
-      const politeFetch=async(...args)=>{
-        if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));
-        const response=await fetch(...args);lastRequestAt=Date.now();return response;
-      };
-      for(const descriptor of descriptors){
-        const {url}=descriptor;
-        try{
-          let source=descriptor.source;
-          if(!source){
-            const response=await politeFetch(url,{credentials:'include'});
-            if([401,403,429,503].includes(response.status)){
-              stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;
-              output.push({url,error:`Server requested a stop (${stopReason})`,stopped:true});
-              break;
-            }
-            if(!response.ok)throw new Error(`HTTP ${response.status}`);
-            source=await response.text();
-          }
-          const doc=new DOMParser().parseFromString(source,'text/html');
-          const root=doc.querySelector('main,article,[role="main"]')||doc.body;
-          const copy=root.cloneNode(true); copy.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,button,[role="navigation"]').forEach(n=>n.remove());
-          let assetBytes=0;
-          const dataUrl=async source=>{
-            try{
-              await pause(250);
-              const response=await politeFetch(source,{credentials:'include'});
-              if([401,403,429,503].includes(response.status)){stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;return null;}
-              if(!response.ok)return null;
-              const blob=await response.blob();if(assetBytes+blob.size>2_000_000)return null;assetBytes+=blob.size;
-              return await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>resolve(null);reader.readAsDataURL(blob);});
-            }catch{return null;}
-          };
-          for(const image of copy.querySelectorAll('img')){
-            const raw=image.getAttribute('src')||image.getAttribute('data-src')||image.getAttribute('data-original');if(!raw)continue;
-            const absolute=new URL(raw,url).href;image.setAttribute('src',absolute);image.removeAttribute('srcset');
-            const embedded=await dataUrl(absolute);if(embedded)image.setAttribute('src',embedded);
-            if(stopReason)break;
-          }
-          const headings=[...copy.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((h,i)=>{if(!h.id)h.id=`sitedoc-heading-${i+1}`;return{id:h.id,title:(h.textContent||'').trim(),level:Number(h.tagName.slice(1))};}).filter(h=>h.title);
-          const crumbs=doc.querySelector('[aria-label*="breadcrumb" i],.breadcrumb,.breadcrumbs');
-          const breadcrumbs=crumbs?[...crumbs.querySelectorAll('a,[aria-current="page"]')].map(a=>({title:(a.textContent||'').trim(),url:a.href})).filter(x=>x.title):[];
-          const title=doc.title||(headings[0]?.title)||url;
-          const styleLinks=[...doc.querySelectorAll('link[rel="stylesheet"][href]')].slice(0,10);
-          const styles=[...doc.querySelectorAll('style')].map(style=>({href:url,css:style.textContent||''}));
-          for(const link of styleLinks){
-            if(stopReason)break;
-            const href=new URL(link.getAttribute('href'),url).href;
-            try{
-              const response=await politeFetch(href,{credentials:'include'});
-              if([401,403,429,503].includes(response.status)){stopReason=`HTTP ${response.status}${response.headers.get('Retry-After')?`, Retry-After: ${response.headers.get('Retry-After')}`:''}`;throw new Error('server requested a stop');}
-              if(!response.ok)throw new Error('stylesheet fetch failed');
-              let css=(await response.text()).slice(0,300_000);
-              const resources=[...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/gi)].map(m=>m[1]).filter(src=>!src.startsWith('data:')&&!src.startsWith('#')))];
-              for(const src of resources){const absolute=new URL(src,href).href;const embedded=await dataUrl(absolute);css=css.split(src).join(embedded||absolute);if(stopReason)break;}
-              styles.push({href,css});
-            }catch{styles.push({href,css:`@import url("${href.replaceAll('"','%22')}");`});}
-            if(stopReason)break;
-          }
-          output.push({title,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath:descriptor.navPath||descriptor.breadcrumbs||[],parentUrl:descriptor.parentUrl||null,parentSections:descriptor.parentSections||[],styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname});
-          if(stopReason)break;
-        }catch(error){output.push({url,error:error.message});}
-      }
-      return {pages:output,stopReason};
-        }});
-        const pages=injection?.result?.pages||[];
-        for(const page of pages){
-          if(page.error){failed++;continue;}
-          const outcome=saveToCollection(collection,page,updateExisting);
-          if(outcome==='added')added++;else if(outcome==='updated')updated++;
-        }
-        if(!injection?.result?.stopReason)failed+=Math.max(0,batch.length-pages.length);
-        await chrome.storage.local.set({collections});
-        if(injection?.result?.stopReason){stoppedReason=injection.result.stopReason;break;}
-      }catch(error){failed+=batch.length;status.textContent=`Партия ${offset+1}–${end} не загрузилась: ${error.message}`;}
-    }
-    preview.hidden=!!stoppedReason;addSelected.hidden=!!stoppedReason;
-    status.textContent=stoppedReason?`Сбор остановлен по ответу сервера (${stoppedReason}). Больше запросов не отправлял. Добавлено ${added}, обновлено ${updated}.`:`Готово: добавлено ${added}, обновлено ${updated}${failed?`, ошибок ${failed}`:''}.`;
-  }catch(e){status.textContent=`Ошибка сбора раздела: ${e.message}`;}
-  finally{addSelected.disabled=false;}
+    chrome.runtime.sendMessage({type:'START_SECTION_IMPORT',tabId:tab.id,items:descriptors,collectionId:collection.id,updateExisting}).catch(error=>{status.textContent=`Не удалось запустить фоновое сохранение: ${error.message}`;});
+    status.textContent=`Сохранение ${descriptors.length} страниц выполняется в фоне. Popup можно закрыть.`;
+  }catch(e){status.textContent=`Ошибка сбора раздела: ${e.message}`;addSelected.disabled=false;}
 }
 
 document.querySelector('#save').addEventListener('click',saveCurrent);
