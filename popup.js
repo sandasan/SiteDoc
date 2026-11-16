@@ -83,13 +83,45 @@ function normalizeUrl(value) {
   return url.href;
 }
 
+function hierarchyKey(value) {
+  return String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\.(html?|php|aspx?)$/i, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function routeFolderNames(value) {
+  try {
+    const parts = decodeURIComponent(new URL(value).pathname).split('/').filter(Boolean);
+    if (parts.length && /\.(html?|php|aspx?)$/i.test(parts.at(-1))) parts.pop();
+    return parts.filter((part, index) => !(index === 0 && /^[a-z]{2}(?:-[a-z]{2})?$/i.test(part)) && !/^(docs?|documentation)$/i.test(part))
+      .map(part => part.replace(/\.(html?|php|aspx?)$/i, '').replace(/[-_]+/g, ' ').replace(/\bpbx\b/gi, 'PBX').replace(/\bapi\b/gi, 'API').replace(/\bivr\b/gi, 'IVR').replace(/\bssl\b/gi, 'SSL').replace(/\b\w/g, c => c.toUpperCase()))
+      .filter(Boolean);
+  } catch { return []; }
+}
+
+function inferHierarchy(data) {
+  const pageUrl=normalizeUrl(data.url), siteName=hierarchyKey(data.siteTitle);
+  const cleanSignal = signal => (signal || []).filter(x => x?.title && x.title.toLowerCase() !== 'home' && hierarchyKey(x.title) !== siteName && (!x.url || normalizeUrl(x.url)!==pageUrl))
+    .filter((x,i,a)=>i===0||hierarchyKey(x.title)!==hierarchyKey(a[i-1].title));
+  const breadcrumbs=cleanSignal(data.breadcrumbs), navPath=cleanSignal(data.navPath);
+  let chosen = breadcrumbs.length >= navPath.length ? breadcrumbs : navPath;
+  let path = chosen.map(x => ({title:x.title,url:x.url||''}));
+  const route = routeFolderNames(data.url);
+  if (!path.length) path = route.map(title => ({title,url:''}));
+  else {
+    // A version segment is useful context even when a site menu omits it.
+    const versions = route.filter(name => /^(?:v)?\d+(?:\.\d+)*(?:\.x)?$|^(?:latest|stable|main)$/i.test(name));
+    for (const version of versions) if (!path.some(item => hierarchyKey(item.title) === hierarchyKey(version))) path.unshift({title:version,url:''});
+  }
+  const result=[];
+  for(const item of path) if(item.title && (!result.length || hierarchyKey(result[result.length-1].title)!==hierarchyKey(item.title))) result.push(item);
+  return result;
+}
+
 function placeByBreadcrumbs(collection, data) {
-  const pageUrl=normalizeUrl(data.url);
-  const crumbs = (data.breadcrumbs || []).filter(x => x && x.title && x.title.toLowerCase() !== 'home' && (!x.url || normalizeUrl(x.url)!==pageUrl)).filter((x,i,a)=>i===0||x.title.toLowerCase()!==a[i-1].title.toLowerCase());
-  if (crumbs.length && crumbs[crumbs.length - 1].title.toLowerCase() === data.title.toLowerCase()) crumbs.pop();
+  const crumbs = inferHierarchy(data);
   let parentId = null;
   for (const crumb of crumbs) {
-    let section = collection.items.find(item => item.kind === 'section' && item.title.toLowerCase() === crumb.title.toLowerCase() && item.parentId === parentId);
+    const key=hierarchyKey(crumb.title);
+    let section = collection.items.find(item => item.kind === 'section' && hierarchyKey(item.title) === key && item.parentId === parentId);
     if (!section) {
       section = { id: crypto.randomUUID(), kind: 'section', parentId, title: crumb.title, url: crumb.url || '', addedAt: Date.now() };
       collection.items.push(section);
@@ -106,11 +138,12 @@ function saveToCollection(collection, data, updateDuplicate = null) {
     const shouldUpdate = updateDuplicate === null ? confirm(`Эта страница уже есть в коллекции:\n${duplicate.title}\n\nОбновить сохранённую копию?`) : updateDuplicate;
     if (!shouldUpdate) return 'skipped';
     const { id, parentId, addedAt, ...rest } = data;
-    Object.assign(duplicate, rest, { updatedAt: Date.now() });
+    Object.assign(duplicate, rest, { hierarchyPath: inferHierarchy(data).map(x=>x.title), updatedAt: Date.now() });
     return 'updated';
   }
+  const hierarchyPath=inferHierarchy(data).map(x=>x.title);
   const parentId = placeByBreadcrumbs(collection, data);
-  collection.items.push({ ...data, id: crypto.randomUUID(), parentId, addedAt: Date.now() });
+  collection.items.push({ ...data, hierarchyPath, id: crypto.randomUUID(), parentId, addedAt: Date.now() });
   return 'added';
 }
 
@@ -128,6 +161,23 @@ async function captureCurrent(tabId) {
       const nav = document.querySelector('[aria-label*="breadcrumb" i], .breadcrumb, .breadcrumbs, nav[aria-label*="path" i]');
       if (!nav) return [];
       return [...nav.querySelectorAll('a,[aria-current="page"]')].map(node => ({ title: (node.innerText || node.textContent || '').trim(), url: node.href || '' })).filter(x => x.title);
+    })();
+    const navPath = (() => {
+      const canonical=value=>{try{const url=new URL(value,location.href);url.hash='';return url.href.replace(/\/$/,'');}catch{return '';}};
+      const current=canonical(location.href), matches=[...document.querySelectorAll('a[href]')].filter(a=>canonical(a.href)===current);
+      let best=[];
+      for(const anchor of matches){
+        const li=anchor.closest('li');if(!li)continue;
+        const path=[];let node=li.parentElement?.closest('li');
+        while(node){
+          const label=node.querySelector(':scope > a, :scope > label, :scope > span, :scope > div > a, :scope > div > span');
+          const title=(label?.innerText||label?.textContent||'').trim().replace(/\s+/g,' ');
+          if(title&&title.length<120)path.unshift({title,url:label.href||''});
+          node=node.parentElement?.closest('li');
+        }
+        if(path.length>best.length)best=path;
+      }
+      return best;
     })();
     let embeddedBytes = 0;
     const toDataUrl = async source => {
@@ -149,7 +199,7 @@ async function captureCurrent(tabId) {
         styles.push({href:sheet.href||location.href,css});
       } catch { if(sheet.href)styles.push({href:sheet.href,css:`@import url("${sheet.href.replaceAll('"','%22')}");`}); }
     }
-    return {title:document.title,url:location.href,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,styles,siteTitle:document.querySelector('meta[property="og:site_name"]')?.content||location.hostname};
+    return {title:document.title,url:location.href,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath,styles,siteTitle:document.querySelector('meta[property="og:site_name"]')?.content||location.hostname};
   }});
   return page.result;
 }
@@ -283,7 +333,7 @@ async function fetchSelectedPages() {
               styles.push({href,css});
             }catch{styles.push({href,css:`@import url("${href.replaceAll('"','%22')}");`});}
           }
-          output.push({title,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs:descriptor.breadcrumbs?.length?descriptor.breadcrumbs:breadcrumbs,styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname});
+          output.push({title,url,html:copy.innerHTML,text:copy.innerText||copy.textContent||'',headings,breadcrumbs,navPath:descriptor.breadcrumbs||[],styles,siteTitle:doc.querySelector('meta[property="og:site_name"]')?.content||new URL(url).hostname});
         }catch(error){output.push({url,error:error.message});}
       }
       return output;
