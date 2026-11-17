@@ -28,6 +28,9 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
   if(message?.type==='START_SECTION_SCAN'){
     startScan(message).then(()=>sendResponse({started:true}),error=>sendResponse({error:error.message}));return true;
   }
+  if(message?.type==='STOP_SECTION_SCAN'){
+    stopScan().then(()=>sendResponse({stopping:true}),error=>sendResponse({error:error.message}));return true;
+  }
   if(message?.type==='START_SECTION_IMPORT'){
     startImport({...message,tabId:message.tabId||sender.tab?.id}).then(()=>sendResponse({started:true}),error=>sendResponse({error:error.message}));return true;
   }
@@ -48,11 +51,22 @@ async function clearResumeIfIdle(){
 
 async function startScan(message){
   const {activeJob}=await chrome.storage.local.get('activeJob');
-  if(activeJob?.phase==='running')throw new Error('Другая фоновая операция ещё выполняется.');
-  const state={tabId:message.tabId,selectedUrl:message.selectedUrl,items:message.items,queue:[...message.items],visited:[],stopReason:''};
-  const job={type:'scan',phase:'running',tabId:message.tabId,done:0,total:state.queue.length,startedAt:Date.now()};
+  if(activeJob?.phase==='running'||activeJob?.phase==='stopping'||(activeJob?.phase==='starting'&&!(activeJob.type==='scan'&&activeJob.jobId===message.jobId)))throw new Error('Другая фоновая операция ещё выполняется.');
+  if(message.jobId&&activeJob?.type==='scan'&&activeJob.jobId===message.jobId&&activeJob.phase==='complete')throw new Error('Сканирование было остановлено до запуска.');
+  const state={jobId:message.jobId,tabId:message.tabId,selectedUrl:message.selectedUrl,scope:message.scope||'site',items:message.items,queue:[...message.items],visited:[],stopReason:''};
+  const job={type:'scan',phase:'running',jobId:state.jobId,scope:state.scope,tabId:message.tabId,done:0,total:state.queue.length,startedAt:Date.now()};
   await chrome.storage.local.set({scanProgress:state,activeJob:job});
   await scheduleResume();
+  void processScan();
+}
+
+async function stopScan(){
+  const {scanProgress,activeJob}=await chrome.storage.local.get(['scanProgress','activeJob']);
+  if(activeJob?.type!=='scan'||!['starting','running','stopping'].includes(activeJob.phase))throw new Error('Сканирование сейчас не выполняется.');
+  if(scanProgress){
+    await chrome.storage.local.set({scanProgress:{...scanProgress,cancelRequested:true},activeJob:{...activeJob,phase:'stopping'}});
+    if(scanProgress.tabId)try{await chrome.scripting.executeScript({target:{tabId:scanProgress.tabId},func:()=>{const controller=globalThis.__sitedocScanAbort;if(controller){controller.__sitedocUserStop=true;controller.abort();}}});}catch{}
+  }else await chrome.storage.local.set({activeJob:{...activeJob,phase:'complete',stopReason:'Остановлено пользователем',finishedAt:Date.now()}});
   void processScan();
 }
 
@@ -63,13 +77,23 @@ async function processScan(){
       const saved=await chrome.storage.local.get(['scanProgress','activeJob']);
       const state=saved.scanProgress,job=saved.activeJob;
       if(!state||job?.type!=='scan')break;
+      if(state.cancelRequested){
+        await chrome.storage.local.set({sectionCandidates:state.items,activeJob:{...job,phase:'complete',done:state.visited.length,total:state.visited.length,stopReason:'Остановлено пользователем',finishedAt:Date.now()}});
+        await chrome.storage.local.remove('scanProgress');break;
+      }
       if(state.retryAt&&state.retryAt>Date.now()){await chrome.alarms.create(RESUME_ALARM,{when:state.retryAt});break;}
       if(!state.queue.length||state.stopReason){
         await chrome.storage.local.set({sectionCandidates:state.items,activeJob:{...job,phase:'complete',done:state.visited.length,total:state.visited.length,stopReason:state.stopReason||'',finishedAt:Date.now()}});
         await chrome.storage.local.remove('scanProgress');break;
       }
       const next=await scanChunk(state);
-      await chrome.storage.local.set({scanProgress:next,activeJob:{...job,done:next.visited.length,total:Math.max(next.visited.length,next.items.length)}});
+      const latest=await chrome.storage.local.get(['scanProgress','activeJob']);
+      if(!latest.scanProgress||latest.activeJob?.type!=='scan')break;
+      if(latest.scanProgress.cancelRequested){
+        await chrome.storage.local.set({sectionCandidates:next.items,activeJob:{...latest.activeJob,phase:'complete',done:next.visited.length,total:next.visited.length,stopReason:'Остановлено пользователем',finishedAt:Date.now()}});
+        await chrome.storage.local.remove('scanProgress');break;
+      }
+      await chrome.storage.local.set({scanProgress:next,activeJob:{...latest.activeJob,done:next.visited.length,total:Math.max(next.visited.length,next.items.length)}});
     }
   }catch(error){
     const {activeJob}=await chrome.storage.local.get('activeJob');
@@ -83,11 +107,14 @@ async function scanChunk(state){
     const canonical=value=>{try{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return value;}};
     const items=new Map(state.items.map(item=>[canonical(item.url),{...item,url:canonical(item.url)}]));
     const queue=[...state.queue],visited=new Set(state.visited);let stopReason=state.stopReason||'',lastRequestAt=0;
+    const scanController=new AbortController();
+    globalThis.__sitedocScanAbort=scanController;
+    const scanTimeout=setTimeout(()=>scanController.abort(),30_000);
     const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-    // Keep the crawl gentle even when a single page exposes many navigation links.
-    const politeFetch=async url=>{if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));const response=await fetch(url,{credentials:'include'});lastRequestAt=Date.now();return response;};
+    // Keep requests gentle and let the stop button abort the active fetch.
+    const politeFetch=async url=>{if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));const response=await fetch(url,{credentials:'include',signal:scanController.signal});lastRequestAt=Date.now();return response;};
     const titleOf=a=>(a.textContent||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
-    for(let count=0;count<8&&queue.length&&!stopReason;count++){
+    for(let count=0;count<2&&queue.length&&!stopReason;count++){
       const parent=queue.shift(),key=canonical(parent.url);if(visited.has(key))continue;visited.add(key);
       try{
         const response=await politeFetch(key);
@@ -95,6 +122,8 @@ async function scanChunk(state){
           const retryAfter=response.headers.get('Retry-After');
           const wait=retryAfter?( /^\d+$/.test(retryAfter)?Number(retryAfter)*1000:Math.max(0,Date.parse(retryAfter)-Date.now()) ):Math.min(60*60*1000,5*60*1000*2**Math.min(Number(state.retryCount)||0,4));
           queue.unshift(parent);visited.delete(key);
+          clearTimeout(scanTimeout);
+          if(globalThis.__sitedocScanAbort===scanController)delete globalThis.__sitedocScanAbort;
           return{...state,items:[...items.values()],queue,visited:[...visited],retryCount:(Number(state.retryCount)||0)+1,retryAt:Date.now()+Math.max(60*1000,wait),stopReason:''};
         }
         if([401,403].includes(response.status)){stopReason=`HTTP ${response.status}`;break;}
@@ -104,6 +133,24 @@ async function scanChunk(state){
         const anchors=[...doc.querySelectorAll('a[href]')].filter(a=>{try{return new URL(a.href).origin===new URL(key).origin&&(canonical(a.href)===key||canonical(a.href)===documentUrl);}catch{return false;}});
         let active=null;for(const anchor of anchors){const li=anchor.closest('li');if(li&&(!active||li.querySelectorAll('a[href]').length>active.querySelectorAll('a[href]').length))active=li;}
         if(!active){
+          if(state.scope==='section'){
+            const pageUrl=new URL(documentUrl);
+            let sectionPrefix=pageUrl.pathname;
+            if(/\.[a-z0-9]{1,8}$/i.test(sectionPrefix))sectionPrefix=sectionPrefix.slice(0,sectionPrefix.lastIndexOf('/')+1);
+            else if(!sectionPrefix.endsWith('/'))sectionPrefix+='/';
+            for(const anchor of doc.querySelectorAll('a[href]')){
+              try{
+                const url=canonical(anchor.href),target=new URL(url),title=titleOf(anchor).replace(/\s+/g,' ');
+                if(target.origin!==pageUrl.origin||!target.pathname.startsWith(sectionPrefix)||url===documentUrl||!title||title.length>160||/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(target.pathname))continue;
+                if(!items.has(url)){
+                  const navPath=[...(parent.navPath||parent.breadcrumbs||[]),{title:parent.title,url:parent.url}];
+                  const descriptor={url,title,breadcrumbs:navPath,navPath,parentUrl:parent.url,parentTitle:parent.title,parentSections:[],depth:(Number(parent.depth)||0)+1};
+                  items.set(url,descriptor);queue.push(descriptor);
+                }
+              }catch{}
+            }
+            continue;
+          }
           // Some documentation themes render navigation without nested list markup,
           // or only expose the active page in the sidebar. In that case, collect
           // same-language documentation links from the page and let the queue walk
@@ -133,8 +180,12 @@ async function scanChunk(state){
           for(const nested of [...child.children].filter(el=>['UL','OL'].includes(el.tagName)))walk(nested,nextUrl,nextTitle,nextSections,nextDepth);
         }};
         for(const nested of [...active.children].filter(el=>['UL','OL'].includes(el.tagName)))walk(nested,key,parent.title,parent.parentSections||[],(Number(parent.depth)||0)+1);
-      }catch{}
+      }catch{
+        if(scanController.signal.aborted){if(!scanController.__sitedocUserStop)stopReason='Тайм-аут запроса';break;}
+      }
     }
+    clearTimeout(scanTimeout);
+    if(globalThis.__sitedocScanAbort===scanController)delete globalThis.__sitedocScanAbort;
     return{...state,items:[...items.values()],queue,visited:[...visited],stopReason,retryAt:0};
   }});
   if(!injection?.result)throw new Error('Не удалось проверить следующую часть дерева.');

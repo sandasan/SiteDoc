@@ -113,3 +113,5 @@
 .collection-manage button{flex:1;padding:7px 8px;border:1px solid var(--line);border-radius:7px;background:#f9fbf9;color:#42534b;font-size:11px}
 .collection-manage button.danger{border-color:#eed0ce;background:#fff7f6;color:#9e3b38}
 .collection-manage button:disabled{opacity:.5;cursor:not-allowed}
+
+.popup .stop-scan{width:100%;margin:4px 0 8px;padding:8px;border:1px solid #e8c9c6;background:#fff7f6;color:#9e3b38;font-size:12px;font-weight:650}.popup .stop-scan:disabled{opacity:.65;cursor:wait}.popup .stop-scan[hidden]{display:none}

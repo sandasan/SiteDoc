@@ -7,10 +7,12 @@ const selectAll = document.querySelector('#selectAll');
 const selectedCount = document.querySelector('#selectedCount');
 const createLibraryForm = document.querySelector('#createLibraryForm');
 const renameLibraryForm = document.querySelector('#renameLibraryForm');
+const stopScanButton = document.querySelector('#stopScan');
 let candidatePages = new Map();
 let candidateCurrentUrl = '';
 let collections = [];
 let activeJobState=null;
+let scanLaunchInProgress=false;
 const read = keys => chrome.storage.local.get(keys);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -31,18 +33,19 @@ async function init() {
   if(saved.sectionCandidates?.length){
     candidatePages=new Map(saved.sectionCandidates.map(item=>[item.url,item]));
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
-    renderCandidates(saved.sectionCandidates,tab?.url||'');
+    renderCandidates(saved.sectionCandidates,tab?.url||'',saved.activeJob?.scope||'site');
   }
   showJob(saved.activeJob);
 }
 
-function renderCandidates(items,currentUrl=''){
+function renderCandidates(items,currentUrl='',scope=activeJobState?.scope||'site'){
   candidateCurrentUrl=currentUrl;
   candidatePages=new Map(items.map(item=>[item.url,item]));
   const library=collections.find(item=>item.id===select.value);
   const canonical=value=>{try{const url=new URL(value);url.hash='';if(url.pathname.length>1)url.pathname=url.pathname.replace(/\/+$/,'');return url.href;}catch{return String(value||'');}};
   const savedUrls=new Set((library?.items||[]).filter(item=>item.kind!=='section').map(item=>canonical(item.url)));
-  const context=items.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ')||'Все разделы и подразделы, найденные в меню сайта';
+  const breadcrumbContext=items.find(item=>item.breadcrumbs?.length)?.breadcrumbs.map(x=>x.title).filter(Boolean).join(' › ');
+  const context=breadcrumbContext||(scope==='section'?'Текущий раздел и его дочерние страницы':'Все разделы и подразделы, найденные в меню сайта');
   document.querySelector('#sectionContext').textContent=context;
   document.querySelector('#resultCount').textContent=items.length;
   const lineage = item => [...(item.navPath?.length ? item.navPath : item.breadcrumbs || []).map(x=>({title:x.title,url:x.url||''})),{title:item.title,url:item.url}];
@@ -66,13 +69,18 @@ document.querySelector('#expandPopup').addEventListener('click',()=>{
 if(new URLSearchParams(location.search).has('fullscreen'))document.body.classList.add('popup-fullscreen');
 
 function showJob(job){
-  if(!job)return;
+  if(!job){stopScanButton.hidden=true;syncScanButtons();return;}
   activeJobState=job;
-  if(job.phase==='running'||job.phase==='starting'){
-    status.textContent=job.type==='scan'?'Сканирую все разделы и подразделы в фоне. Popup можно закрыть; результат появится здесь после повторного открытия.':`Сохраняю страницы в фоне: ${job.done||0} из ${job.total||0}. Popup можно закрыть.`;
+  const scanActive=job.type==='scan'&&['starting','running','stopping'].includes(job.phase);
+  stopScanButton.hidden=!scanActive;
+  stopScanButton.disabled=job.phase==='stopping';
+  stopScanButton.textContent=job.phase==='stopping'?'Останавливаю сканирование…':'Остановить сканирование';
+  syncScanButtons();
+  if(job.phase==='running'||job.phase==='starting'||job.phase==='stopping'){
+    status.textContent=job.type==='scan'?(job.phase==='stopping'?'Останавливаю поиск; сохраню уже найденные страницы.':job.scope==='section'?'Сканирую текущий раздел и дочерние страницы в фоне. Popup можно закрыть.':'Сканирую все разделы и подразделы в фоне. Popup можно закрыть; результат появится здесь после повторного открытия.'):`Сохраняю страницы в фоне: ${job.done||0} из ${job.total||0}. Popup можно закрыть.`;
   }else if(job.phase==='complete'){
     if(job.type==='scan'){
-      const message=job.stopReason?`Сканирование остановлено ответом сервера (${job.stopReason}).`:`Сканирование завершено: проверено ${job.done} страниц.`;
+      const message=job.stopReason==='Остановлено пользователем'?`Сканирование остановлено пользователем после ${job.done} страниц.`:job.stopReason?`Сканирование остановлено (${job.stopReason}) после ${job.done} страниц.`:`Сканирование завершено: проверено ${job.done} страниц.`;
       status.textContent=`${message} Отметьте страницы и нажмите «Добавить выбранные».`;
     }else status.textContent=`Сохранение завершено: добавлено ${job.added}, обновлено ${job.updated}${job.failed?`, ошибок ${job.failed}`:''}${job.incompleteAssets?`, не удалось скачать офлайн ресурсов: ${job.incompleteAssets}`:''}${job.stopReason?`. Остановлено по ответу сервера (${job.stopReason}).`:'.'}`;
   }else if(job.phase==='error')status.textContent=`Фоновая операция завершилась с ошибкой: ${job.error||'неизвестная ошибка'}`;
@@ -100,8 +108,8 @@ function renderAddButton(){
     addSelected.classList.add('is-stopped');addSelected.style.setProperty('--progress',`${percent}%`);
     addSelected.textContent=`Прервано: ${done} из ${total} · выполните новый поиск`;addSelected.disabled=true;return;
   }
-  if(job?.type==='scan'&&(job.phase==='running'||job.phase==='starting')){
-    addSelected.classList.add('is-scan');addSelected.textContent='Поиск всех страниц…';addSelected.disabled=true;return;
+  if(job?.type==='scan'&&['running','starting','stopping'].includes(job.phase)){
+    addSelected.classList.add('is-scan');addSelected.textContent=job.scope==='section'?'Поиск страниц раздела…':'Поиск всех страниц…';addSelected.disabled=true;return;
   }
   addSelected.textContent=checked?`Добавить выбранные (${checked})`:'Выберите страницы';
   addSelected.disabled=checked===0;
@@ -112,10 +120,17 @@ chrome.storage.onChanged.addListener(async(changes,area)=>{
   if(changes.sectionCandidates?.newValue){
     candidatePages=new Map(changes.sectionCandidates.newValue.map(item=>[item.url,item]));
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
-    renderCandidates(changes.sectionCandidates.newValue,tab?.url||'');
+    renderCandidates(changes.sectionCandidates.newValue,tab?.url||'',changes.activeJob?.newValue?.scope||activeJobState?.scope||'site');
   }
   if(changes.activeJob)showJob(changes.activeJob.newValue);
 });
+
+function syncScanButtons(){
+  const busy=scanLaunchInProgress||['starting','running','stopping'].includes(activeJobState?.phase);
+  const disabled=!collections.length||busy;
+  document.querySelector('#findSection').disabled=disabled;
+  document.querySelector('#findCurrentSection').disabled=disabled;
+}
 
 function renderLibrarySelect(selectedId) {
   if (!collections.length) {
@@ -127,7 +142,7 @@ function renderLibrarySelect(selectedId) {
     select.disabled = false;
   }
   document.querySelector('#save').disabled = !collections.length;
-  document.querySelector('#findSection').disabled = !collections.length;
+  syncScanButtons();
   document.querySelector('#deleteAllLibraries').disabled = !collections.length;
   document.querySelector('#deleteLibrary').disabled = !collections.length;
   document.querySelector('#showRenameLibrary').disabled = !collections.length;
@@ -410,11 +425,17 @@ async function saveCurrent() {
   } catch(e) { status.textContent=`Не удалось сохранить страницу: ${e.message}`; }
 }
 
-async function findSectionLinks() {
-  status.textContent='Ищу все разделы в меню документации…';
+async function findSectionLinks(scope='site') {
+  if(scanLaunchInProgress||['starting','running','stopping'].includes(activeJobState?.phase))return;
+  const {activeJob:storedJob}=await read(['activeJob']);
+  if(['starting','running','stopping'].includes(storedJob?.phase)){
+    status.textContent='Сначала дождитесь завершения фоновой операции или остановите сканирование.';return;
+  }
+  scanLaunchInProgress=true;syncScanButtons();
+  status.textContent=scope==='section'?'Ищу страницы текущего раздела…':'Ищу все разделы в меню документации…';
   try {
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
-    const [injection]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>{
+    const [injection]=await chrome.scripting.executeScript({target:{tabId:tab.id},args:[scope],func:(scope)=>{
       const here=new URL(location.href),canonical=value=>{try{const u=new URL(value,location.href);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return '';}},current=canonical(location.href),currentParts=here.pathname.split('/').filter(Boolean),currentLang=currentParts.find(part=>/^[a-z]{2}(?:-[a-z]{2})?$/i.test(part));
       const titleOf=node=>(node?.innerText||node?.textContent||node?.getAttribute?.('aria-label')||node?.title||'').trim().replace(/\s+/g,' ');
       const valid=a=>{try{const raw=a.getAttribute('href')||'',u=new URL(a.href);return !raw.trim().startsWith('#')&&u.origin===here.origin&&!/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(u.pathname);}catch{return false;}};
@@ -432,8 +453,11 @@ async function findSectionLinks() {
         const depth=Math.max(0,parts.length-(/\.(html?|php|aspx?)$/i.test(parts.at(-1)||'')?1:0));
         candidates.set(url,{url,title:label, breadcrumbs:[],navPath:[],parentUrl:parentUrl===url?null:parentUrl,parentTitle:'',parentSections:[],depth});
       };
-      for(const root of roots)for(const a of root.querySelectorAll('a[href]'))addLink(a);
-      for(const a of document.querySelectorAll('a[href]'))addLink(a);
+      if(scope!=='section'){
+        for(const root of roots)for(const a of root.querySelectorAll('a[href]'))addLink(a);
+        for(const a of document.querySelectorAll('a[href]'))addLink(a);
+      }
+      let currentNavPath=[];
       const lists=[...new Set(roots.flatMap(root=>[...root.querySelectorAll('ul,ol')]))].filter(list=>!list.parentElement?.closest('ul,ol'));
       const walk=(list,pageAncestors=[],sectionAncestors=[],depth=0)=>{
         for(const li of [...list.children].filter(node=>node.tagName==='LI')){
@@ -444,6 +468,7 @@ async function findSectionLinks() {
             if(title&&url){
               const parent=pageAncestors.at(-1)||null, parentSections=sectionAncestors;
               const navPath=[...pageAncestors.map(x=>({title:x.title,url:x.url})),...sectionAncestors.map(title=>({title,url:''}))];
+              if(url===current&&navPath.length>=currentNavPath.length)currentNavPath=navPath;
               if(url!==current)candidates.set(url,{url,title,breadcrumbs:[],navPath,parentUrl:parent?.url||null,parentTitle:parent?.title||'',parentSections,depth});
               nextPages=[...pageAncestors,{title,url}];nextSections=[];nextDepth=depth+1;
             }
@@ -455,6 +480,10 @@ async function findSectionLinks() {
         }
       };
       for(const list of lists)walk(list);
+      if(scope==='section'){
+        const title=document.querySelector('h1')?.innerText?.trim()||document.title||here.hostname;
+        return {items:[{url:current,title,breadcrumbs:currentNavPath,navPath:currentNavPath,parentUrl:null,parentTitle:'',parentSections:[],depth:currentNavPath.length}]};
+      }
       // Documentation generators commonly serve the parent directory as its index page.
       // Add it as a discovery seed so its menu can reveal sibling sections and descendants.
       const currentPath=here.pathname.replace(/[^/]+$/,'');
@@ -468,13 +497,23 @@ async function findSectionLinks() {
       return {items:[...candidates.values()]};
     }});
     const result=injection?.result?.items||[];
-    if(!result.length){status.textContent='На этой странице не удалось прочитать меню разделов.';return;}
-    status.textContent=`Найдено ${result.length} страниц. Проверяю всё дерево в фоне…`;
-    await chrome.storage.local.set({sectionCandidates:result,activeJob:{type:'scan',phase:'starting',tabId:tab.id,done:0,total:result.length,startedAt:Date.now()}});
-    chrome.runtime.sendMessage({type:'START_SECTION_SCAN',tabId:tab.id,items:result,selectedUrl:tab.url}).catch(error=>{activeJobState={type:'scan',phase:'error'};renderAddButton();status.textContent=`Не удалось запустить фоновое сканирование: ${error.message}`;void chrome.storage.local.set({activeJob:{type:'scan',phase:'error',error:error.message}});});
-    renderCandidates(result,tab.url);
-    status.textContent='Обнаружение всего дерева выполняется в фоне. Popup можно закрыть; откройте его снова, чтобы увидеть результат.';
-  }catch(e){status.textContent=`Не удалось прочитать разделы: ${e.message}`;}
+    if(!result.length){
+      scanLaunchInProgress=false;syncScanButtons();
+      status.textContent='На этой странице не удалось прочитать меню разделов.';return;
+    }
+    const jobId=crypto.randomUUID();
+    const startingJob={type:'scan',phase:'starting',jobId,scope,tabId:tab.id,done:0,total:result.length,startedAt:Date.now()};
+    await chrome.storage.local.set({sectionCandidates:result});
+    activeJobState=startingJob;scanLaunchInProgress=false;showJob(startingJob);renderCandidates(result,tab.url,scope);
+    const response=await chrome.runtime.sendMessage({type:'START_SECTION_SCAN',jobId,scope,tabId:tab.id,items:result,selectedUrl:tab.url});
+    if(response?.error)throw new Error(response.error);
+    status.textContent=scope==='section'?'Сканирование текущего раздела выполняется в фоне. Popup можно закрыть.':'Обнаружение всего дерева выполняется в фоне. Popup можно закрыть; откройте его снова, чтобы увидеть результат.';
+  }catch(e){
+    scanLaunchInProgress=false;
+    status.textContent=`Не удалось запустить сканирование: ${e.message}`;
+    if(activeJobState?.phase==='starting')activeJobState={...activeJobState,phase:'error',error:e.message};
+    stopScanButton.hidden=true;syncScanButtons();renderAddButton();
+  }
 }
 
 async function fetchSelectedPages() {
@@ -500,7 +539,13 @@ async function fetchSelectedPages() {
 }
 
 document.querySelector('#save').addEventListener('click',saveCurrent);
-document.querySelector('#findSection').addEventListener('click',findSectionLinks);
+document.querySelector('#findSection').addEventListener('click',()=>findSectionLinks('site'));
+document.querySelector('#findCurrentSection').addEventListener('click',()=>findSectionLinks('section'));
+stopScanButton.addEventListener('click',async()=>{
+  stopScanButton.disabled=true;stopScanButton.textContent='Останавливаю сканирование…';
+  try{const result=await chrome.runtime.sendMessage({type:'STOP_SECTION_SCAN'});if(result?.error)throw new Error(result.error);status.textContent='Остановка сканирования запрошена…';}
+  catch(error){status.textContent=`Не удалось остановить сканирование: ${error.message}`;stopScanButton.disabled=false;}
+});
 document.querySelector('#editPageMenu').addEventListener('click',async()=>{
   try{
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
