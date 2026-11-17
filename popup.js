@@ -363,10 +363,10 @@ async function captureCurrent(tabId) {
     const toDataUrl = source => {
       if(dataUrlCache.has(source))return dataUrlCache.get(source);
       const request=(async()=>{try {
-        const response = await fetch(source, { credentials: 'include' });
-        if (!response.ok) { offlineMissingAssets.add(source); return null; }
-        const blob = await response.blob();
-        return await new Promise(resolve => { const reader=new FileReader(); reader.onload=()=>resolve(reader.result); reader.onerror=()=>{offlineMissingAssets.add(source);resolve(null);}; reader.readAsDataURL(blob); });
+        if(source.startsWith('blob:')){const blob=await (await fetch(source)).blob();return await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>{offlineMissingAssets.add(source);resolve(null);};reader.readAsDataURL(blob);});}
+        const result = await chrome.runtime.sendMessage({type:'FETCH_OFFLINE_ASSET',url:source});
+        if (!result?.ok) { offlineMissingAssets.add(source); return null; }
+        return result.dataUrl;
       } catch { offlineMissingAssets.add(source); return null; }})();
       dataUrlCache.set(source,request);
       return request;
@@ -391,11 +391,11 @@ async function captureCurrent(tabId) {
         for(const source of urls){try{const absolute=new URL(source,sheet.href||location.href).href;const data=await toDataUrl(absolute);css=css.split(source).join(data||absolute);}catch{}}
         styles.push({href:sheet.href||location.href,css});
       } catch {
-        // Cross-origin stylesheets hide cssRules; fetch their text directly when CORS permits.
+        // Cross-origin stylesheets hide cssRules; use the extension worker when page fetch is blocked.
         if(sheet.href)try{
           const response=await fetch(sheet.href,{credentials:'include'});
-          if(response.ok){let css=await response.text();const urls=[...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/gi)].map(m=>m[1].trim()).filter(u=>!u.startsWith('data:')&&!u.startsWith('#')))];for(const source of urls){try{const absolute=new URL(source,sheet.href).href;const data=await toDataUrl(absolute);css=css.split(source).join(data||absolute);}catch{}}styles.push({href:sheet.href,css});}
-        }catch{}
+          if(response.ok){let css=await response.text();const urls=[...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/gi)].map(m=>m[1].trim()).filter(u=>!u.startsWith('data:')&&!u.startsWith('#')))];for(const source of urls){try{const absolute=new URL(source,sheet.href).href;const data=await toDataUrl(absolute);css=css.split(source).join(data||absolute);}catch{}}styles.push({href:sheet.href,css});}else offlineMissingAssets.add(sheet.href);
+        }catch{try{const result=await chrome.runtime.sendMessage({type:'FETCH_OFFLINE_ASSET',url:sheet.href,asText:true});if(result?.ok){let css=result.text;const urls=[...new Set([...css.matchAll(/url\(["']?([^"')]+)["']?\)/gi)].map(m=>m[1].trim()).filter(u=>!u.startsWith('data:')&&!u.startsWith('#')))];for(const source of urls){const absolute=new URL(source,sheet.href).href;const data=await toDataUrl(absolute);css=css.split(source).join(data||absolute);}styles.push({href:sheet.href,css});}else offlineMissingAssets.add(sheet.href);}catch{offlineMissingAssets.add(sheet.href);}}
       }
     }
     // Inline background images are common in documentation cards and diagrams.
