@@ -114,6 +114,7 @@ async function scanChunk(state){
     // Keep requests gentle and let the stop button abort the active fetch.
     const politeFetch=async url=>{if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));const response=await fetch(url,{credentials:'include',signal:scanController.signal});lastRequestAt=Date.now();return response;};
     const titleOf=a=>(a.textContent||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
+    const sectionBase=(()=>{if(state.scope!=='section')return null;try{const u=new URL(state.selectedUrl||location.href);if(/\.[a-z0-9]{1,8}$/i.test(u.pathname))u.pathname=u.pathname.slice(0,u.pathname.lastIndexOf('/')+1);else if(!u.pathname.endsWith('/'))u.pathname+='/';return{origin:u.origin,prefix:u.pathname};}catch{return null;}})();
     for(let count=0;count<2&&queue.length&&!stopReason;count++){
       const parent=queue.shift(),key=canonical(parent.url);if(visited.has(key))continue;visited.add(key);
       try{
@@ -130,18 +131,15 @@ async function scanChunk(state){
         if(!response.ok)continue;
         const doc=new DOMParser().parseFromString(await response.text(),'text/html');
         const documentUrl=canonical(response.url||key);
-        const anchors=[...doc.querySelectorAll('a[href]')].filter(a=>{try{return new URL(a.href).origin===new URL(key).origin&&(canonical(a.href)===key||canonical(a.href)===documentUrl);}catch{return false;}});
-        let active=null;for(const anchor of anchors){const li=anchor.closest('li');if(li&&(!active||li.querySelectorAll('a[href]').length>active.querySelectorAll('a[href]').length))active=li;}
-        if(!active){
-          if(state.scope==='section'){
-            const pageUrl=new URL(documentUrl);
-            let sectionPrefix=pageUrl.pathname;
-            if(/\.[a-z0-9]{1,8}$/i.test(sectionPrefix))sectionPrefix=sectionPrefix.slice(0,sectionPrefix.lastIndexOf('/')+1);
-            else if(!sectionPrefix.endsWith('/'))sectionPrefix+='/';
+        if(state.scope==='section'){
+          // Keep the original section boundary while following every descendant page.
+          // The active sidebar entry often has no nested links, so relying on it alone
+          // leaves directory index pages with only the initial URL in the result.
+          if(sectionBase){
             for(const anchor of doc.querySelectorAll('a[href]')){
               try{
-                const url=canonical(anchor.href),target=new URL(url),title=titleOf(anchor).replace(/\s+/g,' ');
-                if(target.origin!==pageUrl.origin||!target.pathname.startsWith(sectionPrefix)||url===documentUrl||!title||title.length>160||/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(target.pathname))continue;
+                const url=canonical(anchor.href),target=new URL(url),title=titleOf(anchor);
+                if(target.origin!==sectionBase.origin||!target.pathname.startsWith(sectionBase.prefix)||url===documentUrl||!title||title.length>160||/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(target.pathname))continue;
                 if(!items.has(url)){
                   const navPath=[...(parent.navPath||parent.breadcrumbs||[]),{title:parent.title,url:parent.url}];
                   const descriptor={url,title,breadcrumbs:navPath,navPath,parentUrl:parent.url,parentTitle:parent.title,parentSections:[],depth:(Number(parent.depth)||0)+1};
@@ -149,8 +147,12 @@ async function scanChunk(state){
                 }
               }catch{}
             }
-            continue;
           }
+          continue;
+        }
+        const anchors=[...doc.querySelectorAll('a[href]')].filter(a=>{try{return new URL(a.href).origin===new URL(key).origin&&(canonical(a.href)===key||canonical(a.href)===documentUrl);}catch{return false;}});
+        let active=null;for(const anchor of anchors){const li=anchor.closest('li');if(li&&(!active||li.querySelectorAll('a[href]').length>active.querySelectorAll('a[href]').length))active=li;}
+        if(!active){
           // Some documentation themes render navigation without nested list markup,
           // or only expose the active page in the sidebar. In that case, collect
           // same-language documentation links from the page and let the queue walk
