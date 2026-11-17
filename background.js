@@ -128,7 +128,6 @@ async function scanChunk(state){
     // Keep requests gentle and let the stop button abort the active fetch.
     const politeFetch=async url=>{if(lastRequestAt)await pause(Math.max(0,1000-(Date.now()-lastRequestAt)));const response=await fetch(url,{credentials:'include',signal:scanController.signal});lastRequestAt=Date.now();return response;};
     const titleOf=a=>(a.textContent||a.getAttribute('aria-label')||a.title||'').trim().replace(/\s+/g,' ');
-    const sectionBase=(()=>{if(state.scope!=='section')return null;try{const u=new URL(state.selectedUrl||location.href);if(/\.[a-z0-9]{1,8}$/i.test(u.pathname))u.pathname=u.pathname.slice(0,u.pathname.lastIndexOf('/')+1);else if(!u.pathname.endsWith('/'))u.pathname+='/';return{origin:u.origin,prefix:u.pathname};}catch{return null;}})();
     for(let count=0;count<2&&queue.length&&!stopReason;count++){
       const parent=queue.shift(),key=canonical(parent.url);if(visited.has(key))continue;visited.add(key);
       try{
@@ -146,21 +145,41 @@ async function scanChunk(state){
         const doc=new DOMParser().parseFromString(await response.text(),'text/html');
         const documentUrl=canonical(response.url||key);
         if(state.scope==='section'){
-          // Keep the original section boundary while following every descendant page.
-          // The active sidebar entry often has no nested links, so relying on it alone
-          // leaves directory index pages with only the initial URL in the result.
-          if(sectionBase){
-            for(const anchor of doc.querySelectorAll('a[href]')){
-              try{
-                const url=canonical(anchor.href),target=new URL(url),title=titleOf(anchor);
-                if(target.origin!==sectionBase.origin||!target.pathname.startsWith(sectionBase.prefix)||url===documentUrl||!title||title.length>160||/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(target.pathname))continue;
-                if(!items.has(url)){
-                  const navPath=[...(parent.navPath||parent.breadcrumbs||[]),{title:parent.title,url:parent.url}];
-                  const descriptor={url,title,breadcrumbs:navPath,navPath,parentUrl:parent.url,parentTitle:parent.title,parentSections:[],depth:(Number(parent.depth)||0)+1};
-                  items.set(url,descriptor);queue.push(descriptor);
+          const sameSite=a=>{try{return new URL(a.href,documentUrl).origin===new URL(documentUrl).origin;}catch{return false;}};
+          const active=[...doc.querySelectorAll('a[href]')].filter(a=>sameSite(a)&&canonical(new URL(a.href,documentUrl).href)===documentUrl);
+          const activeLi=active.map(a=>a.closest('li')).filter(Boolean).sort((a,b)=>a.querySelectorAll('a[href]').length-b.querySelectorAll('a[href]').length)[0];
+          let foundInTree=0;
+          const addTree=(list,pageParent,sections,lineage,depth)=>{
+            for(const li of [...list.children].filter(node=>node.tagName==='LI')){
+              const link=[...li.children].flatMap(node=>node.matches?.('a[href]')?[node]:[...node.querySelectorAll?.(':scope > a[href]')||[]]).find(sameSite);
+              let nextParent=pageParent,nextSections=sections,nextLineage=lineage,nextDepth=depth;
+              if(link){
+                const url=canonical(new URL(link.href,documentUrl).href),title=titleOf(link);
+                if(title&&title.length<=160&&url!==documentUrl&&!/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(new URL(url).pathname)){
+                  const navPath=[...lineage,...sections.map(section=>({title:section,url:''}))];
+                  const descriptor={url,title,breadcrumbs:navPath,navPath,parentUrl:pageParent.url,parentTitle:pageParent.title,parentSections:sections,depth:depth+1};
+                  if(!items.has(url)){items.set(url,descriptor);queue.push(descriptor);foundInTree++;}
+                  nextParent=descriptor;nextSections=[];nextLineage=navPath.concat({title,url});nextDepth=depth+1;
                 }
-              }catch{}
+              }else{
+                const label=[...li.children].find(node=>!['UL','OL'].includes(node.tagName));const section=titleOf(label);
+                if(section&&section.length<=120)nextSections=[...sections,section];
+              }
+              for(const nested of [...li.children].filter(node=>['UL','OL'].includes(node.tagName)))addTree(nested,nextParent,nextSections,nextLineage,nextDepth);
             }
+          };
+          if(activeLi)for(const nested of [...activeLi.children].filter(node=>['UL','OL'].includes(node.tagName)))addTree(nested,parent,[],parent.navPath||parent.breadcrumbs||[],Number(parent.depth)||0);
+          // If the site has no navigable subsection tree, use only the start
+          // page's main-content links as a useful first-level map. Do not recurse
+          // through arbitrary body links on every child page.
+          if(!foundInTree&&(Number(parent.depth)||0)===0){
+            const roots=[...doc.querySelectorAll('main article, main, article, [role="main"], .content-body, .field--name-body')];
+            const content=roots.find(node=>node.querySelector('a[href]'))||doc.body;
+            for(const anchor of content.querySelectorAll('a[href]'))try{
+              const url=canonical(new URL(anchor.getAttribute('href'),documentUrl).href),target=new URL(url),title=titleOf(anchor);
+              if(target.origin!==new URL(documentUrl).origin||url===documentUrl||!title||title.length>160||/\.(pdf|png|jpe?g|svg|zip|tar|gz|css|js)$/i.test(target.pathname))continue;
+              if(!items.has(url)){const navPath=[...(parent.navPath||parent.breadcrumbs||[]),{title:parent.title,url:parent.url}];const descriptor={url,title,breadcrumbs:navPath,navPath,parentUrl:parent.url,parentTitle:parent.title,parentSections:[],depth:1};items.set(url,descriptor);queue.push(descriptor);}
+            }catch{}
           }
           continue;
         }

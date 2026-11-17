@@ -523,7 +523,7 @@ async function findSectionLinks(scope='site') {
       for(const list of lists)walk(list);
       if(scope==='section'){
         const title=document.querySelector('h1')?.innerText?.trim()||document.title||here.hostname;
-        return {items:[{url:current,title,breadcrumbs:currentNavPath,navPath:currentNavPath,parentUrl:null,parentTitle:'',parentSections:[],depth:currentNavPath.length}]};
+        return {items:[{url:current,title,breadcrumbs:currentNavPath,navPath:currentNavPath,parentUrl:null,parentTitle:'',parentSections:[],depth:0}]};
       }
       // Documentation generators commonly serve the parent directory as its index page.
       // Add it as a discovery seed so its menu can reveal sibling sections and descendants.
