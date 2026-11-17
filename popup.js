@@ -76,7 +76,10 @@ function showJob(job){
   stopScanButton.disabled=job.phase==='stopping';
   stopScanButton.textContent=job.phase==='stopping'?'Останавливаю сканирование…':'Остановить сканирование';
   syncScanButtons();
-  if(job.phase==='running'||job.phase==='starting'||job.phase==='stopping'){
+  if(job.phase==='waiting'&&job.type==='import'){
+    status.textContent=`Сайт временно ограничил загрузку (${job.stopReason||'HTTP 429'}). Следующая попытка через ${formatWait(job.retryAt)}; сохранено ${job.done||0} из ${job.total||0}.`;
+    scheduleWaitRefresh();
+  }else if(job.phase==='running'||job.phase==='starting'||job.phase==='stopping'){
     status.textContent=job.type==='scan'?(job.phase==='stopping'?'Останавливаю поиск; сохраню уже найденные страницы.':job.scope==='section'?'Сканирую текущий раздел и дочерние страницы в фоне. Popup можно закрыть.':'Сканирую все разделы и подразделы в фоне. Popup можно закрыть; результат появится здесь после повторного открытия.'):`Сохраняю страницы в фоне: ${job.done||0} из ${job.total||0}. Popup можно закрыть.`;
   }else if(job.phase==='complete'){
     if(job.type==='scan'){
@@ -85,6 +88,19 @@ function showJob(job){
     }else status.textContent=`Сохранение завершено: добавлено ${job.added}, обновлено ${job.updated}${job.failed?`, ошибок ${job.failed}`:''}${job.incompleteAssets?`, не удалось скачать офлайн ресурсов: ${job.incompleteAssets}`:''}${job.stopReason?`. Остановлено по ответу сервера (${job.stopReason}).`:'.'}`;
   }else if(job.phase==='error')status.textContent=`Фоновая операция завершилась с ошибкой: ${job.error||'неизвестная ошибка'}`;
   renderAddButton();
+}
+
+function formatWait(retryAt){
+  const seconds=Math.max(0,Math.ceil((Number(retryAt)-Date.now())/1000));
+  return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
+}
+let waitRefreshTimer;
+function scheduleWaitRefresh(){
+  if(waitRefreshTimer)return;
+  waitRefreshTimer=setInterval(()=>{
+    if(activeJobState?.phase!=='waiting'){clearInterval(waitRefreshTimer);waitRefreshTimer=undefined;return;}
+    showJob(activeJobState);
+  },1000);
 }
 
 function renderAddButton(){
@@ -96,6 +112,10 @@ function renderAddButton(){
     const total=Math.max(1,Number(job.total)||checked),done=Math.min(total,Number(job.done)||0),percent=Math.round(done/total*100);
     addSelected.classList.add('is-progress');addSelected.style.setProperty('--progress',`${percent}%`);
     addSelected.textContent=`Сохранение страниц: ${done} из ${total}`;addSelected.disabled=true;return;
+  }
+  if(job?.type==='import'&&job.phase==='waiting'){
+    addSelected.classList.add('is-stopped');addSelected.style.setProperty('--progress',`${Math.round((Number(job.done)||0)/Math.max(1,Number(job.total)||1)*100)}%`);
+    addSelected.textContent=`Пауза сайта: повтор через ${formatWait(job.retryAt)}`;addSelected.disabled=true;return;
   }
   if(job?.type==='import'&&job.phase==='complete'){
     const total=Math.max(1,Number(job.total)||checked),done=Math.min(total,Number(job.done)||0),percent=Math.round(done/total*100);

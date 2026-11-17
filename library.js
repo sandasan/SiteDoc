@@ -10,7 +10,29 @@ async function init() {
   collections = await SiteDocStore.getCollections();
   if (!collections.length) { collections = [{ id: crypto.randomUUID(), title: 'Моя библиотека', items: [] }]; await persist(); }
   selectedCollection = collections[0]?.id || ''; render();
+  const {activeJob} = await chrome.storage.local.get('activeJob');
+  renderJobStatus(activeJob);
 }
+let jobWaitTimer;
+function renderJobStatus(job) {
+  const banner = $('#jobStatus');
+  if (!banner) return;
+  if (job?.type === 'import' && job.phase === 'waiting') {
+    const seconds = Math.max(0, Math.ceil((Number(job.retryAt) - Date.now()) / 1000));
+    banner.hidden = false;
+    banner.textContent = `Сайт временно ограничил загрузку (${job.stopReason || 'HTTP 429'}). Следующая попытка через ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}. Сохранено ${job.done || 0} из ${job.total || 0}.`;
+    if (!jobWaitTimer) jobWaitTimer = setInterval(() => renderJobStatus(job), 1000);
+    return;
+  }
+  if (jobWaitTimer) { clearInterval(jobWaitTimer); jobWaitTimer = null; }
+  if (job?.type === 'import' && ['starting', 'running'].includes(job.phase)) {
+    banner.hidden = false;
+    banner.textContent = `Сохранение страниц: ${job.done || 0} из ${job.total || 0}.`;
+  } else banner.hidden = true;
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.activeJob) renderJobStatus(changes.activeJob.newValue);
+});
 function render() {
   $('#collections').innerHTML = collections.length
     ? collections.map(c => `<option value="${c.id}" ${c.id === selectedCollection ? 'selected' : ''}>${esc(c.title)} (${c.items.length})</option>`).join('')

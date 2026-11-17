@@ -92,6 +92,10 @@ async function processScan(){
         await chrome.storage.local.remove('scanProgress');break;
       }
       if(state.retryAt&&state.retryAt>Date.now()){await chrome.alarms.create(RESUME_ALARM,{when:state.retryAt});break;}
+      if(state.retryAt){
+        const resumed={...state,retryAt:0,stopReason:'',job:{...state.job,phase:'running',retryAt:0,stopReason:''}};
+        await chrome.storage.local.set({importProgress:resumed,activeJob:resumed.job});
+      }
       if(!state.queue.length||state.stopReason){
         await chrome.storage.local.set({sectionCandidates:state.items,activeJob:{...job,phase:'complete',done:state.visited.length,total:state.visited.length,stopReason:state.stopReason||'',finishedAt:Date.now()}});
         await chrome.storage.local.remove('scanProgress');break;
@@ -221,14 +225,18 @@ async function processImport(){
       const {importProgress:state}=await chrome.storage.local.get('importProgress');
       if(!state)break;
       if(state.retryAt&&state.retryAt>Date.now()){await chrome.alarms.create(RESUME_ALARM,{when:state.retryAt});break;}
+      if(state.retryAt){
+        const resumed={...state,retryAt:0,job:{...state.job,phase:'running',retryAt:0,stopReason:''}};
+        await chrome.storage.local.set({importProgress:resumed,activeJob:resumed.job});
+      }
       if(state.offset>=state.items.length||state.stopReason){
         await chrome.storage.local.set({activeJob:{...state.job,phase:'complete',stopReason:state.stopReason,finishedAt:Date.now()}});
         await chrome.storage.local.remove('importProgress');break;
       }
       const item=state.items[state.offset];
       const result=await importPage(state.tabId,item,state.collectionId,state.updateExisting,state.job);
-      const next={...state,offset:result.retryAt?state.offset:state.offset+1,job:result.job,stopReason:'',retryAt:result.retryAt||0,retryCount:result.retryAt?(Number(state.retryCount)||0)+1:0};
-      await chrome.storage.local.set({importProgress:next,activeJob:{...next.job,done:next.offset,stopReason:next.stopReason}});
+      const next={...state,offset:result.retryAt?state.offset:state.offset+1,job:{...result.job,phase:result.retryAt?'waiting':'running',retryAt:result.retryAt||0,stopReason:result.retryAt?result.stopReason:''},stopReason:'',retryAt:result.retryAt||0,retryCount:result.retryAt?(Number(state.retryCount)||0)+1:0};
+      await chrome.storage.local.set({importProgress:next,activeJob:{...next.job,done:next.offset}});
     }
   }catch(error){
     const {importProgress:state}=await chrome.storage.local.get('importProgress');
