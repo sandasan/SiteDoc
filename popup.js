@@ -144,6 +144,7 @@ function renderLibrarySelect(selectedId) {
   document.querySelector('#save').disabled = !collections.length;
   syncScanButtons();
   document.querySelector('#deleteAllLibraries').disabled = !collections.length;
+  document.querySelector('#clearLibrary').disabled = !collections.length;
   document.querySelector('#deleteLibrary').disabled = !collections.length;
   document.querySelector('#showRenameLibrary').disabled = !collections.length;
 }
@@ -224,6 +225,17 @@ document.querySelector('#deleteAllLibraries').addEventListener('click', async ()
   renderLibrarySelect('');
   preview.hidden = true; addSelected.hidden = true;
   status.textContent = 'Все библиотеки удалены. Создайте новую, чтобы продолжить.';
+});
+document.querySelector('#clearLibrary').addEventListener('click', async () => {
+  const library = collections.find(item => item.id === select.value);
+  if (!library) return;
+  const pageCount = library.items.filter(item => item.kind !== 'section').length;
+  if (!library.items.length) { status.textContent = `Библиотека «${library.title}» уже пуста.`; return; }
+  if (!confirm(`Очистить библиотеку «${library.title}» и удалить ${pageCount} сохранённых страниц? Библиотека останется.`)) return;
+  library.items = [];
+  await SiteDocStore.saveCollections(collections);
+  preview.hidden = true; addSelected.hidden = true;
+  status.textContent = `Библиотека «${library.title}» очищена.`;
 });
 document.querySelector('#deleteLibrary').addEventListener('click', async () => {
   const library = collections.find(item => item.id === select.value);

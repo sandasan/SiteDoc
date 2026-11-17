@@ -17,6 +17,7 @@ function render() {
     : '<option value="">Нет коллекций — создайте новую</option>';
   $('#collections').value = selectedCollection;
   $('#renameCollection').disabled = !current();
+  $('#clearCollection').disabled = !current() || !items().length;
   $('#deleteCollection').disabled = !current();
   const list = items();
   $('#outline').innerHTML = list.map((p, i) => {
@@ -121,6 +122,14 @@ $('#renameCollection').addEventListener('click', async () => {
   const duplicate = collections.find(item => item.id !== collection.id && item.title.trim().toLocaleLowerCase() === title.toLocaleLowerCase());
   if (duplicate) { alert(`Коллекция «${duplicate.title}» уже существует.`); return; }
   collection.title = title;
+  await persist(); render();
+});
+$('#clearCollection').addEventListener('click', async () => {
+  const collection = current(); if (!collection || !collection.items.length) return;
+  const pageCount = collection.items.filter(item => item.kind !== 'section').length;
+  if (!confirm(`Очистить коллекцию «${collection.title}» и удалить ${pageCount} сохранённых страниц? Коллекция останется.`)) return;
+  collection.items = [];
+  selectedPage = ''; selectedForDelete.clear();
   await persist(); render();
 });
 $('#deleteCollection').addEventListener('click', async () => {
