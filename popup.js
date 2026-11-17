@@ -77,10 +77,10 @@ function showJob(job){
   stopScanButton.textContent=job.phase==='stopping'?'Останавливаю сканирование…':'Остановить сканирование';
   syncScanButtons();
   if(job.phase==='waiting'&&job.type==='import'){
-    status.textContent=`Сайт временно ограничил загрузку (${job.stopReason||'HTTP 429'}). Следующая попытка через ${formatWait(job.retryAt)}; сохранено ${job.done||0} из ${job.total||0}.`;
+    status.textContent=`Сайт временно ограничил загрузку (${job.stopReason||'HTTP 429'}). Следующая попытка через ${formatWait(job.retryAt)}; сохранено ${job.done||0} из ${job.total||0}.${formatEta(job)}`;
     scheduleWaitRefresh();
   }else if(job.phase==='running'||job.phase==='starting'||job.phase==='stopping'){
-    status.textContent=job.type==='scan'?(job.phase==='stopping'?'Останавливаю поиск; сохраню уже найденные страницы.':job.scope==='section'?'Сканирую текущий раздел и дочерние страницы в фоне. Popup можно закрыть.':'Сканирую все разделы и подразделы в фоне. Popup можно закрыть; результат появится здесь после повторного открытия.'):`Сохраняю страницы в фоне: ${job.done||0} из ${job.total||0}. Popup можно закрыть.`;
+    status.textContent=job.type==='scan'?(job.phase==='stopping'?'Останавливаю поиск; сохраню уже найденные страницы.':job.scope==='section'?'Сканирую текущий раздел и дочерние страницы в фоне. Popup можно закрыть.':'Сканирую все разделы и подразделы в фоне. Popup можно закрыть; результат появится здесь после повторного открытия.'):`Сохраняю страницы в фоне: ${job.done||0} из ${job.total||0}.${formatEta(job)} Popup можно закрыть.`;
   }else if(job.phase==='complete'){
     if(job.type==='scan'){
       const message=job.stopReason==='Остановлено пользователем'?`Сканирование остановлено пользователем после ${job.done} страниц.`:job.stopReason?`Сканирование остановлено (${job.stopReason}) после ${job.done} страниц.`:`Сканирование завершено: проверено ${job.done} страниц.`;
@@ -93,6 +93,15 @@ function showJob(job){
 function formatWait(retryAt){
   const seconds=Math.max(0,Math.ceil((Number(retryAt)-Date.now())/1000));
   return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
+}
+function formatEta(job){
+  const done=Number(job.done)||0,total=Number(job.total)||0,startedAt=Number(job.startedAt)||0;
+  if(done>=total)return '';
+  if(!done||!total||!startedAt)return ' Примерное время окончания появится после сохранения первой страницы.';
+  const remainingMs=(Date.now()-startedAt)/done*(total-done),finish=new Date(Date.now()+remainingMs);
+  const minutes=Math.max(1,Math.round(remainingMs/60000));
+  const duration=minutes<60?`около ${minutes} мин.`:`около ${Math.floor(minutes/60)} ч. ${minutes%60} мин.`;
+  return ` Примерное окончание: ${finish.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})} (${duration}).`;
 }
 let waitRefreshTimer;
 function scheduleWaitRefresh(){
@@ -115,7 +124,7 @@ function renderAddButton(){
   }
   if(job?.type==='import'&&job.phase==='waiting'){
     addSelected.classList.add('is-stopped');addSelected.style.setProperty('--progress',`${Math.round((Number(job.done)||0)/Math.max(1,Number(job.total)||1)*100)}%`);
-    addSelected.textContent=`Пауза сайта: повтор через ${formatWait(job.retryAt)}`;addSelected.disabled=true;return;
+    addSelected.textContent=`Пауза: повтор через ${formatWait(job.retryAt)}${formatEta(job)}`;addSelected.disabled=true;return;
   }
   if(job?.type==='import'&&job.phase==='complete'){
     const total=Math.max(1,Number(job.total)||checked),done=Math.min(total,Number(job.done)||0),percent=Math.round(done/total*100);

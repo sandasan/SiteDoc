@@ -20,15 +20,25 @@ function renderJobStatus(job) {
   if (job?.type === 'import' && job.phase === 'waiting') {
     const seconds = Math.max(0, Math.ceil((Number(job.retryAt) - Date.now()) / 1000));
     banner.hidden = false;
-    banner.textContent = `Сайт временно ограничил загрузку (${job.stopReason || 'HTTP 429'}). Следующая попытка через ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}. Сохранено ${job.done || 0} из ${job.total || 0}.`;
+    banner.textContent = `Сайт временно ограничил загрузку (${job.stopReason || 'HTTP 429'}). Следующая попытка через ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}. Сохранено ${job.done || 0} из ${job.total || 0}.${formatJobEta(job)}`;
     if (!jobWaitTimer) jobWaitTimer = setInterval(() => renderJobStatus(job), 1000);
     return;
   }
   if (jobWaitTimer) { clearInterval(jobWaitTimer); jobWaitTimer = null; }
   if (job?.type === 'import' && ['starting', 'running'].includes(job.phase)) {
     banner.hidden = false;
-    banner.textContent = `Сохранение страниц: ${job.done || 0} из ${job.total || 0}.`;
+    banner.textContent = `Сохранение страниц: ${job.done || 0} из ${job.total || 0}.${formatJobEta(job)}`;
   } else banner.hidden = true;
+}
+function formatJobEta(job) {
+  const done = Number(job.done) || 0, total = Number(job.total) || 0, startedAt = Number(job.startedAt) || 0;
+  if (done >= total) return '';
+  if (!done || !total || !startedAt) return ' Примерное время окончания появится после сохранения первой страницы.';
+  const remainingMs = (Date.now() - startedAt) / done * (total - done);
+  const minutes = Math.max(1, Math.round(remainingMs / 60000));
+  const duration = minutes < 60 ? `около ${minutes} мин.` : `около ${Math.floor(minutes / 60)} ч. ${minutes % 60} мин.`;
+  const finish = new Date(Date.now() + remainingMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return ` Примерное окончание: ${finish} (${duration}).`;
 }
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.activeJob) renderJobStatus(changes.activeJob.newValue);
