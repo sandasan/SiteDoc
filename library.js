@@ -1,10 +1,44 @@
 const $ = s => document.querySelector(s);
 let collections = [], selectedCollection = '', selectedPage = '';
 const selectedForDelete = new Set();
+let pageSizes = new Map(), sizeCollectionId = '', sizeRequest = null;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const current = () => collections.find(c => c.id === selectedCollection);
 const items = () => current()?.items || [];
-const persist = () => SiteDocStore.saveCollections(collections);
+const persist = async () => { pageSizes.clear(); sizeCollectionId = ''; return SiteDocStore.saveCollections(collections); };
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} Б`;
+  const units = ['КБ', 'МБ', 'ГБ'];
+  let value = bytes / 1024, unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  return `${value.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ${units[unit]}`;
+}
+
+async function refreshSizes() {
+  const collectionId = selectedCollection;
+  if (!collectionId || sizeCollectionId === collectionId || sizeRequest) return;
+  sizeRequest = (async () => {
+    const [collection] = await SiteDocStore.getFullCollections(collectionId);
+    if (!collection || selectedCollection !== collectionId) return;
+    const encoder = new TextEncoder(), next = new Map();
+    let total = 0;
+    for (const item of collection.items) {
+      const size = encoder.encode(JSON.stringify(item)).byteLength;
+      next.set(item.id, size);
+      total += size;
+    }
+    pageSizes = next;
+    sizeCollectionId = collectionId;
+    $('#collectionSize').textContent = `Размер: ${formatBytes(total)}`;
+    render(false);
+  })().catch(error => {
+    sizeCollectionId = collectionId;
+    if (selectedCollection === collectionId) $('#collectionSize').textContent = `Не удалось оценить размер: ${error.message}`;
+  }).finally(() => { sizeRequest = null; });
+  await sizeRequest;
+  if (selectedCollection && sizeCollectionId !== selectedCollection) void refreshSizes();
+}
 
 async function init() {
   collections = await SiteDocStore.getCollections();
@@ -43,7 +77,7 @@ function formatJobEta(job) {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.activeJob) renderJobStatus(changes.activeJob.newValue);
 });
-function render() {
+function render(refreshSize = true) {
   $('#collections').innerHTML = collections.length
     ? collections.map(c => `<option value="${c.id}" ${c.id === selectedCollection ? 'selected' : ''}>${esc(c.title)} (${c.items.length})</option>`).join('')
     : '<option value="">Нет коллекций — создайте новую</option>';
@@ -57,7 +91,8 @@ function render() {
     while (parent && level < 3) { level++; parent = list.find(x => x.id === parent)?.parentId; }
     level = Math.min(3, level);
     const checkbox = p.kind === 'section' ? '' : `<input class="page-selector" data-select-page="${esc(p.id)}" type="checkbox" aria-label="Выбрать ${esc(p.title)} для удаления" ${selectedForDelete.has(p.id) ? 'checked' : ''}>`;
-    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${esc(p.id)}">${checkbox}<span class="tree-title" title="${esc(p.url || p.title)}">${p.kind === 'section' ? '▸ ' : ''}${esc(p.title)}</span><button class="icon-button" data-act="up" title="Вверх">↑</button><button class="icon-button" data-act="down" title="Вниз">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущую">↳</button></div></li>`;
+    const size = pageSizes.get(p.id);
+    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${esc(p.id)}">${checkbox}<span class="tree-title" title="${esc(p.url || p.title)}">${p.kind === 'section' ? '▸ ' : ''}${esc(p.title)}</span>${size !== undefined ? `<span class="item-size" title="Оценка размера сохранённых данных">${formatBytes(size)}</span>` : ''}<button class="icon-button" data-act="up" title="Вверх">↑</button><button class="icon-button" data-act="down" title="Вниз">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущую">↳</button></div></li>`;
   }).join('') || '<li class="empty small">В этой коллекции пока нет страниц. Откройте страницу и добавьте её через значок расширения.</li>';
   $('#outline').querySelectorAll('.outline-item').forEach(row => row.addEventListener('click', e => {
     const id = row.dataset.id, act = e.target.dataset.act;
@@ -81,6 +116,10 @@ function render() {
     } else void loadPagePreview(p);
   }
   updateBulkDeleteControls();
+  if (refreshSize && sizeCollectionId !== selectedCollection) {
+    $('#collectionSize').textContent = 'Подсчитываю размер…';
+    void refreshSizes();
+  }
 }
 async function loadPagePreview(page) {
   $('#pagePreview').removeAttribute('srcdoc');
@@ -120,6 +159,7 @@ function renderPagePreview(p) {
   const crumbs = (p.breadcrumbs || []).map(x => x.title).filter(Boolean);
   const facts = [
     p.siteTitle ? `<span class="fact-chip">${esc(p.siteTitle)}</span>` : '',
+    pageSizes.has(p.id) ? `<span class="fact-chip">Размер: ${formatBytes(pageSizes.get(p.id))}</span>` : '',
     `<span class="fact-chip">${words.toLocaleString()} слов</span>`,
     `<span class="fact-chip">${images} изображений</span>`,
     `<span class="fact-chip">Сохранено: ${esc(date)}</span>`
