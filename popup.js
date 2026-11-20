@@ -8,6 +8,7 @@ const selectedCount = document.querySelector('#selectedCount');
 const createLibraryForm = document.querySelector('#createLibraryForm');
 const renameLibraryForm = document.querySelector('#renameLibraryForm');
 const stopScanButton = document.querySelector('#stopScan');
+const sectionTreeDisclosure = document.querySelector('#sectionTreeDisclosure');
 let candidatePages = new Map();
 let candidateCurrentUrl = '';
 let collections = [];
@@ -18,7 +19,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 
 async function init() {
   const storedCollections = await SiteDocStore.getCollections();
-  const saved = await read(['collections', 'selectedCollectionId','sectionCandidates','activeJob']);
+  const saved = await read(['collections', 'selectedCollectionId','sectionCandidates','activeJob','sectionTreeExpanded']);
+  sectionTreeDisclosure.open = saved.sectionTreeExpanded !== false;
   collections = storedCollections;
   if (!Array.isArray(saved.collections)) {
     const first = { id: crypto.randomUUID(), title: 'Моя библиотека', items: [] };
@@ -37,6 +39,10 @@ async function init() {
   }
   showJob(saved.activeJob);
 }
+
+sectionTreeDisclosure.addEventListener('toggle', () => {
+  void chrome.storage.local.set({ sectionTreeExpanded: sectionTreeDisclosure.open });
+});
 
 function renderCandidates(items,currentUrl='',scope=activeJobState?.scope||'site'){
   candidateCurrentUrl=currentUrl;
