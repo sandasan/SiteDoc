@@ -25,6 +25,11 @@
 .popup .action-card:hover{filter:brightness(.97)}
 .popup .action-card:focus-visible,.popup button:focus-visible,.popup a:focus-visible{outline:2px solid #69a78e;outline-offset:2px}
 .preview-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px}
+.preview-heading{cursor:pointer;list-style:none}
+.preview-heading::-webkit-details-marker{display:none}
+.preview-heading::before{content:"▸";flex:0 0 auto;color:var(--green)}
+#sectionTreeDisclosure[open]>.preview-heading::before{content:"▾"}
+.preview-heading:focus-visible{outline:2px solid #69a78e;outline-offset:3px;border-radius:4px}
 .preview-heading b{font-size:13px}
 .preview-heading small{max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .count-badge,.current-badge{border-radius:999px;background:#e6eee9;color:#426856;padding:2px 8px;font-size:10px;white-space:nowrap}

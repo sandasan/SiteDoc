@@ -55,12 +55,16 @@
     </div>
 
     <section id="sectionPreview" class="section-preview" hidden aria-label="Найденные страницы">
-      <div class="preview-heading">
-        <div><b>Дерево страниц сайта</b><small id="sectionContext">Проверьте состав перед добавлением</small></div>
-        <span id="resultCount" class="count-badge"></span>
-      </div>
-      <label class="select-all"><input id="selectAll" type="checkbox" checked><span>Выбрать все</span><small id="selectedCount"></small></label>
-      <div id="sectionLinks"></div>
+      <details id="sectionTreeDisclosure" open>
+        <summary class="preview-heading">
+          <div><b>Дерево страниц сайта</b><small id="sectionContext">Проверьте состав перед добавлением</small></div>
+          <span id="resultCount" class="count-badge"></span>
+        </summary>
+        <div class="preview-content">
+          <label class="select-all"><input id="selectAll" type="checkbox" checked><span>Выбрать все</span><small id="selectedCount"></small></label>
+          <div id="sectionLinks"></div>
+        </div>
+      </details>
     </section>
 
     <p id="status" class="status" role="status" aria-live="polite"></p>
