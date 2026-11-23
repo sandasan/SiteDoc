@@ -4,7 +4,7 @@
   "version": "0.11.0",
   "description": "Сохраняйте страницы сайтов в коллекции и экспортируйте их в EPUB или PDF.",
   "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage", "downloads", "alarms"],
-  "host_permissions": ["<all_urls>"],
+  "optional_host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "action": { "default_title": "Добавить страницу в SiteDoc", "default_popup": "popup.html" },
   "options_page": "library.html"

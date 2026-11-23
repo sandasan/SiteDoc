@@ -17,6 +17,11 @@ let scanLaunchInProgress=false;
 const read = keys => chrome.storage.local.get(keys);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+async function requestSiteAccess(){
+  try{return await chrome.permissions.request({origins:['<all_urls>']});}
+  catch{return false;}
+}
+
 async function init() {
   const storedCollections = await SiteDocStore.getCollections();
   const saved = await read(['collections', 'selectedCollectionId','sectionCandidates','activeJob','sectionTreeExpanded']);
@@ -464,6 +469,7 @@ async function captureCurrent(tabId) {
 async function saveCurrent() {
   status.textContent = 'Сохраняю страницу…';
   try {
+    const hasSiteAccess=await requestSiteAccess();
     const [tab] = await chrome.tabs.query({active:true,currentWindow:true});
     const data = await captureCurrent(tab.id);
     const {collections=[]} = await read(['collections']);
@@ -471,7 +477,7 @@ async function saveCurrent() {
     const result=saveToCollection(collection,data);
     if(result==='skipped'){status.textContent='Оставил сохранённую копию без изменений.';return;}
     await SiteDocStore.saveCollections(collections);
-    status.textContent = `${result==='updated' ? `Обновлено: ${data.title}` : `Добавлено: ${data.title}`}${data.offlineMissingAssets?.length?`. Не удалось скачать офлайн ресурсов: ${data.offlineMissingAssets.length}`:''}`;
+    status.textContent = `${result==='updated' ? `Обновлено: ${data.title}` : `Добавлено: ${data.title}`}${data.offlineMissingAssets?.length?`. Не удалось скачать офлайн ресурсов: ${data.offlineMissingAssets.length}`:''}${hasSiteAccess?'':' Доступ к сайтам не предоставлен; часть изображений и стилей может отсутствовать.'}`;
   } catch(e) { status.textContent=`Не удалось сохранить страницу: ${e.message}`; }
 }
 
@@ -571,6 +577,7 @@ async function fetchSelectedPages() {
   if(!urls.length){status.textContent='Выберите хотя бы одну страницу.';return;}
   addSelected.disabled=true;
   try{
+    const hasSiteAccess=await requestSiteAccess();
     const savedJob=(await read(['activeJob'])).activeJob;
     let tab;
     try{tab=savedJob?.tabId?await chrome.tabs.get(savedJob.tabId):null;}catch{}
@@ -584,7 +591,7 @@ async function fetchSelectedPages() {
     const updateExisting=duplicateCount?confirm(`Будет добавлено новых страниц: ${descriptors.length-duplicateCount}. Уже сохранённых страниц будет обновлено: ${duplicateCount}. Продолжить?`):false;
     activeJobState={type:'import',phase:'starting',done:0,total:descriptors.length};renderAddButton();
     chrome.runtime.sendMessage({type:'START_SECTION_IMPORT',tabId:tab.id,items:descriptors,collectionId:collection.id,updateExisting}).catch(error=>{activeJobState={type:'import',phase:'error',done:0,total:descriptors.length};renderAddButton();status.textContent=`Не удалось запустить фоновое сохранение: ${error.message}`;void chrome.storage.local.set({activeJob:{type:'import',phase:'error',done:0,total:descriptors.length,error:error.message}});});
-    status.textContent=`Сохранение ${descriptors.length} страниц выполняется в фоне. Popup можно закрыть.`;
+    status.textContent=`Сохранение ${descriptors.length} страниц выполняется в фоне. Popup можно закрыть.${hasSiteAccess?'':' Доступ к сайтам не предоставлен; часть изображений и стилей может отсутствовать.'}`;
   }catch(e){status.textContent=`Ошибка сбора раздела: ${e.message}`;addSelected.disabled=false;}
 }
 

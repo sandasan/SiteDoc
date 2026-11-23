@@ -24,6 +24,7 @@
 .secondary.action-card .action-icon{background:#dcebe4;color:var(--green)}
 .popup .action-card:hover{filter:brightness(.97)}
 .popup .action-card:focus-visible,.popup button:focus-visible,.popup a:focus-visible{outline:2px solid #69a78e;outline-offset:2px}
+.popup .permission-note{margin:0 0 2px;padding:8px 10px;border-left:3px solid #9bbcab;border-radius:0 7px 7px 0;background:#eef4f0;color:#52665b;font-size:10px;line-height:1.4}
 .preview-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px}
 .preview-heading{cursor:pointer;list-style:none}
 .preview-heading::-webkit-details-marker{display:none}
