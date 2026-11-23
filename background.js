@@ -230,7 +230,7 @@ async function scanChunk(state){
 async function startImport(message){
   const {activeJob}=await chrome.storage.local.get('activeJob');
   if(activeJob?.phase==='running')throw new Error('Другая фоновая операция ещё выполняется.');
-  const job={type:'import',phase:'running',tabId:message.tabId,done:0,total:message.items.length,added:0,updated:0,failed:0,incompleteAssets:0,startedAt:Date.now()};
+  const job={type:'import',phase:'running',tabId:message.tabId,done:0,total:message.items.length,added:0,updated:0,failed:0,errors:[],incompleteAssets:0,startedAt:Date.now()};
   const state={tabId:message.tabId,items:message.items,collectionId:message.collectionId,updateExisting:message.updateExisting,offset:0,job,stopReason:''};
   await chrome.storage.local.set({importProgress:state,activeJob:job});
   await scheduleResume();
@@ -254,7 +254,8 @@ async function processImport(){
       }
       const item=state.items[state.offset];
       const result=await importPage(state.tabId,item,state.collectionId,state.updateExisting,state.job);
-      const next={...state,offset:result.retryAt?state.offset:state.offset+1,job:{...result.job,phase:result.retryAt?'waiting':'running',retryAt:result.retryAt||0,stopReason:result.retryAt?result.stopReason:''},stopReason:'',retryAt:result.retryAt||0,retryCount:result.retryAt?(Number(state.retryCount)||0)+1:0};
+      const stopped=result.stopReason&&!result.retryAt;
+      const next={...state,offset:result.retryAt?state.offset:state.offset+1,job:{...result.job,phase:result.retryAt?'waiting':stopped?'complete':'running',retryAt:result.retryAt||0,stopReason:result.retryAt||stopped?result.stopReason:''},stopReason:stopped?result.stopReason:'',retryAt:result.retryAt||0,retryCount:result.retryAt?(Number(state.retryCount)||0)+1:0};
       await chrome.storage.local.set({importProgress:next,activeJob:{...next.job,done:next.offset}});
     }
   }catch(error){
@@ -298,7 +299,7 @@ async function importPage(tabId,descriptor,collectionId,updateExisting,previousJ
   if(result.retryAt){job.retryCount=(Number(job.retryCount)||0)+1;return{job,stopReason:result.stopReason||'',retryAt:result.retryAt};}
   let collections=await SiteDocStore.getCollections();
   const collection=collections.find(item=>item.id===collectionId);if(!collection)throw new Error('Выбранная библиотека больше не существует.');
-  for(const page of result.pages||[]){if(page.error){job.failed++;continue;}const outcome=savePage(collection,page,updateExisting);if(outcome==='added')job.added++;else if(outcome==='updated')job.updated++;job.incompleteAssets=(Number(job.incompleteAssets)||0)+(page.offlineMissingAssets?.length||0);}
+  for(const page of result.pages||[]){if(page.error){job.failed++;job.errors=[...(job.errors||[]),{title:page.title||descriptor.title||page.url||descriptor.url,url:page.url||descriptor.url,error:String(page.error)}].slice(-5);continue;}const outcome=savePage(collection,page,updateExisting);if(outcome==='added')job.added++;else if(outcome==='updated')job.updated++;job.incompleteAssets=(Number(job.incompleteAssets)||0)+(page.offlineMissingAssets?.length||0);}
   const collectionIndex=collections.findIndex(item=>item.id===collectionId);collections[collectionIndex]=collection;
   await SiteDocStore.saveCollections(collections);
   return{job,stopReason:result.stopReason||'',retryAt:result.retryAt||0};

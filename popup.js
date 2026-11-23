@@ -96,8 +96,17 @@ function showJob(job){
     if(job.type==='scan'){
       const message=job.stopReason==='Остановлено пользователем'?`Сканирование остановлено пользователем после ${job.done} страниц.`:job.stopReason?`Сканирование остановлено (${job.stopReason}) после ${job.done} страниц.`:`Сканирование завершено: проверено ${job.done} страниц.`;
       status.textContent=`${message} Отметьте страницы и нажмите «Добавить выбранные».`;
-    }else status.textContent=`Сохранение завершено: добавлено ${job.added}, обновлено ${job.updated}${job.failed?`, ошибок ${job.failed}`:''}${job.incompleteAssets?`, не удалось скачать офлайн ресурсов: ${job.incompleteAssets}`:''}${job.stopReason?`. Остановлено по ответу сервера (${job.stopReason}).`:'.'}`;
-  }else if(job.phase==='error')status.textContent=`Фоновая операция завершилась с ошибкой: ${job.error||'неизвестная ошибка'}`;
+    }else{
+      const examples=(job.errors||[]).slice(0,2).map(item=>`${item.title}: ${item.error}`).join('; ');
+      const failures=job.failed?`. Не удалось сохранить ${job.failed} страниц${examples?`; например: ${examples}`:''}. Проверьте доступ к страницам и запустите сбор снова`:'';
+      const assets=job.incompleteAssets?`. Не удалось встроить ресурсов: ${job.incompleteAssets}. Проверьте доступ к сайтам и обновите копии`:'';
+      const stopped=job.stopReason?`. Сбор остановлен: ${job.stopReason}`:'';
+      status.textContent=`Сохранение завершено: добавлено ${job.added}, обновлено ${job.updated}${failures}${assets}${stopped}.`;
+    }
+  }else if(job.phase==='error'){
+    const progress=job.type==='import'?` Сохранено ${job.done||0} из ${job.total||0}.`:'';
+    status.textContent=`Фоновая операция прервана: ${job.error||'неизвестная ошибка'}.${progress} Проверьте, что вкладка сайта доступна, и запустите операцию снова.`;
+  }
   renderAddButton();
 }
 

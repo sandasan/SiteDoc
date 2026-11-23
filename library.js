@@ -51,6 +51,7 @@ let jobWaitTimer;
 function renderJobStatus(job) {
   const banner = $('#jobStatus');
   if (!banner) return;
+  banner.classList.remove('is-running', 'is-complete', 'is-error');
   if (job?.type === 'import' && job.phase === 'waiting') {
     const seconds = Math.max(0, Math.ceil((Number(job.retryAt) - Date.now()) / 1000));
     banner.hidden = false;
@@ -61,7 +62,17 @@ function renderJobStatus(job) {
   if (jobWaitTimer) { clearInterval(jobWaitTimer); jobWaitTimer = null; }
   if (job?.type === 'import' && ['starting', 'running'].includes(job.phase)) {
     banner.hidden = false;
+    banner.classList.add('is-running');
     banner.textContent = `Сохранение страниц: ${job.done || 0} из ${job.total || 0}.${formatJobEta(job)}`;
+  } else if (job?.type === 'import' && job.phase === 'complete') {
+    banner.hidden = false;
+    banner.classList.add(job.failed || job.incompleteAssets || job.stopReason ? 'is-error' : 'is-complete');
+    const errors = (job.errors || []).slice(0, 2).map(item => `${item.title}: ${item.error}`).join('; ');
+    banner.textContent = `Сохранение завершено: добавлено ${job.added || 0}, обновлено ${job.updated || 0}${job.failed ? `. Не удалось сохранить ${job.failed}${errors ? ` страниц (например: ${errors})` : ' страниц'}. Проверьте доступ к страницам и запустите сбор снова` : ''}${job.incompleteAssets ? `. Не удалось встроить ресурсов: ${job.incompleteAssets}. Проверьте доступ к сайтам и обновите копии` : ''}${job.stopReason ? `. Сбор остановлен: ${job.stopReason}` : ''}.`;
+  } else if (job?.type === 'import' && job.phase === 'error') {
+    banner.hidden = false;
+    banner.classList.add('is-error');
+    banner.textContent = `Фоновое сохранение прервано: ${job.error || 'неизвестная ошибка'}. Сохранено ${job.done || 0} из ${job.total || 0}. Проверьте, что вкладка сайта доступна, и запустите операцию снова.`;
   } else banner.hidden = true;
 }
 function formatJobEta(job) {
