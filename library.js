@@ -264,7 +264,19 @@ $('#title').addEventListener('change', async e => { const p = items().find(x => 
 $('#url').addEventListener('change', async e => { const p = items().find(x => x.id === selectedPage); if (p) { p.url = e.target.value; await persist(); } });
 $('#up').onclick = () => move(selectedPage, 'up'); $('#down').onclick = () => move(selectedPage, 'down'); $('#indent').onclick = () => move(selectedPage, 'indent');
 $('#outdent').onclick = () => move(selectedPage, 'outdent');
-$('#delete').onclick = async () => { const c = current(), remove = new Set([selectedPage]); let changed = true; while (changed) { changed = false; for (const p of c.items) if (remove.has(p.parentId) && !remove.has(p.id)) { remove.add(p.id); changed = true; } } c.items = c.items.filter(p => !remove.has(p.id)); selectedPage = ''; await persist(); render(); };
+$('#delete').onclick = async () => {
+  const c = current(), selected = items().find(item => item.id === selectedPage);
+  if (!c || !selected) return;
+  const remove = new Set([selectedPage]); let changed = true;
+  while (changed) { changed = false; for (const p of c.items) if (remove.has(p.parentId) && !remove.has(p.id)) { remove.add(p.id); changed = true; } }
+  const descendants = [...remove].filter(id => id !== selectedPage).map(id => c.items.find(item => item.id === id)).filter(Boolean);
+  const descendantPages = descendants.filter(item => item.kind !== 'section').length;
+  const descendantSections = descendants.length - descendantPages;
+  const detail = descendants.length ? ` Вместе с вложенными элементами удалятся страниц: ${descendantPages}, разделов: ${descendantSections}.` : '';
+  if (!confirm(`Удалить «${selected.title}»?${detail} Это действие нельзя отменить.`)) return;
+  c.items = c.items.filter(p => !remove.has(p.id));
+  selectedPage = ''; await persist(); render();
+};
 $('#exportPdf').onclick = async () => { const w = window.open('', '_blank'); if (!w) return; const c = (await SiteDocStore.getFullCollections(selectedCollection))[0]; if (!c?.items.length) { w.close(); return; } w.document.write(printDocument(c)); w.document.close(); w.focus(); setTimeout(() => w.print(), 500); };
 function printDocument(c) {
   const pages = c.items.filter(p => p.kind !== 'section');
