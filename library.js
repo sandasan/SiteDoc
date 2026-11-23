@@ -103,7 +103,7 @@ function render(refreshSize = true) {
     level = Math.min(3, level);
     const checkbox = p.kind === 'section' ? '' : `<input class="page-selector" data-select-page="${esc(p.id)}" type="checkbox" aria-label="Выбрать ${esc(p.title)} для удаления" ${selectedForDelete.has(p.id) ? 'checked' : ''}>`;
     const size = pageSizes.get(p.id);
-    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${esc(p.id)}">${checkbox}<span class="tree-title" title="${esc(p.url || p.title)}">${p.kind === 'section' ? '▸ ' : ''}${esc(p.title)}</span>${size !== undefined ? `<span class="item-size" title="Оценка размера сохранённых данных">${formatBytes(size)}</span>` : ''}<button class="icon-button" data-act="up" title="Вверх">↑</button><button class="icon-button" data-act="down" title="Вниз">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущую">↳</button></div></li>`;
+    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${esc(p.id)}">${checkbox}<span class="tree-title" title="${esc(p.url || p.title)}">${p.kind === 'section' ? '▸ ' : ''}${esc(p.title)}</span>${size !== undefined ? `<span class="item-size" title="Оценка размера сохранённых данных">${formatBytes(size)}</span>` : ''}<button class="icon-button" data-act="up" title="Переместить выше" aria-label="Переместить ${esc(p.title)} выше">↑</button><button class="icon-button" data-act="down" title="Переместить ниже" aria-label="Переместить ${esc(p.title)} ниже">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущий элемент" aria-label="Вложить ${esc(p.title)} в предыдущий элемент">↳</button><button class="icon-button" data-act="outdent" title="Поднять на один уровень" aria-label="Поднять ${esc(p.title)} на один уровень">↰</button></div></li>`;
   }).join('') || '<li class="empty small">В этой коллекции пока нет страниц. Откройте страницу и добавьте её через значок расширения.</li>';
   $('#outline').querySelectorAll('.outline-item').forEach(row => row.addEventListener('click', e => {
     const id = row.dataset.id, act = e.target.dataset.act;
@@ -194,6 +194,10 @@ function move(id, action) {
     while (ancestor.parentId && !createsCycle) { ancestor = a.find(item => item.id === ancestor.parentId); createsCycle = ancestor?.id === id; if (!ancestor) break; }
     if (!createsCycle) a[i].parentId = proposedParent.id;
   }
+  if (action === 'outdent') {
+    const parent = a.find(item => item.id === a[i].parentId);
+    if (parent) a[i].parentId = parent.parentId || null;
+  }
   persist().then(render);
 }
 $('#collections').addEventListener('change', e => { selectedCollection = e.target.value; selectedPage = ''; selectedForDelete.clear(); render(); });
@@ -259,7 +263,7 @@ $('#deleteSelectedPages').addEventListener('click', async () => {
 $('#title').addEventListener('change', async e => { const p = items().find(x => x.id === selectedPage); if (p) { p.title = e.target.value.trim() || p.title; await persist(); render(); } });
 $('#url').addEventListener('change', async e => { const p = items().find(x => x.id === selectedPage); if (p) { p.url = e.target.value; await persist(); } });
 $('#up').onclick = () => move(selectedPage, 'up'); $('#down').onclick = () => move(selectedPage, 'down'); $('#indent').onclick = () => move(selectedPage, 'indent');
-$('#outdent').onclick = async () => { const p = items().find(x => x.id === selectedPage); if (p) { p.parentId = null; await persist(); render(); } };
+$('#outdent').onclick = () => move(selectedPage, 'outdent');
 $('#delete').onclick = async () => { const c = current(), remove = new Set([selectedPage]); let changed = true; while (changed) { changed = false; for (const p of c.items) if (remove.has(p.parentId) && !remove.has(p.id)) { remove.add(p.id); changed = true; } } c.items = c.items.filter(p => !remove.has(p.id)); selectedPage = ''; await persist(); render(); };
 $('#exportPdf').onclick = async () => { const w = window.open('', '_blank'); if (!w) return; const c = (await SiteDocStore.getFullCollections(selectedCollection))[0]; if (!c?.items.length) { w.close(); return; } w.document.write(printDocument(c)); w.document.close(); w.focus(); setTimeout(() => w.print(), 500); };
 function printDocument(c) {
