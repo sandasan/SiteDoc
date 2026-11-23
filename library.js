@@ -130,7 +130,7 @@ function render(refreshSize = true) {
     level = Math.min(3, level);
     const checkbox = p.kind === 'section' ? '' : `<input class="page-selector" data-select-page="${esc(p.id)}" type="checkbox" aria-label="Выбрать ${esc(p.title)} для удаления" ${selectedForDelete.has(p.id) ? 'checked' : ''}>`;
     const size = pageSizes.get(p.id);
-    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${esc(p.id)}">${checkbox}<span class="tree-title" title="${esc(p.url || p.title)}">${p.kind === 'section' ? '▸ ' : ''}${esc(p.title)}</span>${size !== undefined ? `<span class="item-size" title="Оценка размера сохранённых данных">${formatBytes(size)}</span>` : ''}<button class="icon-button" data-act="up" title="Переместить выше" aria-label="Переместить ${esc(p.title)} выше">↑</button><button class="icon-button" data-act="down" title="Переместить ниже" aria-label="Переместить ${esc(p.title)} ниже">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущий элемент" aria-label="Вложить ${esc(p.title)} в предыдущий элемент">↳</button><button class="icon-button" data-act="outdent" title="Поднять на один уровень" aria-label="Поднять ${esc(p.title)} на один уровень">↰</button></div></li>`;
+    return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${esc(p.id)}">${checkbox}<button class="tree-title" type="button" data-act="select" title="${esc(p.url || p.title)}" aria-label="Открыть ${esc(p.title)}">${p.kind === 'section' ? '▸ ' : ''}${esc(p.title)}</button>${size !== undefined ? `<span class="item-size" title="Оценка размера сохранённых данных">${formatBytes(size)}</span>` : ''}<button class="icon-button" data-act="up" title="Переместить выше" aria-label="Переместить ${esc(p.title)} выше">↑</button><button class="icon-button" data-act="down" title="Переместить ниже" aria-label="Переместить ${esc(p.title)} ниже">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущий элемент" aria-label="Вложить ${esc(p.title)} в предыдущий элемент">↳</button><button class="icon-button" data-act="outdent" title="Поднять на один уровень" aria-label="Поднять ${esc(p.title)} на один уровень">↰</button></div></li>`;
   }).join('') || `<li class="empty small">${query ? 'Совпадений нет. Измените поисковый запрос.' : 'В этой коллекции пока нет страниц. Откройте страницу и добавьте её через значок расширения.'}</li>`;
   $('#outline').querySelectorAll('.outline-item').forEach(row => row.addEventListener('click', e => {
     const id = row.dataset.id, act = e.target.dataset.act;
@@ -138,7 +138,8 @@ function render(refreshSize = true) {
       e.stopPropagation();
       if (e.target.checked) selectedForDelete.add(id); else selectedForDelete.delete(id);
       updateBulkDeleteControls();
-    } else if (act) { e.stopPropagation(); move(id, act); } else { selectedPage = id; render(); }
+    } else if (act === 'select') { e.stopPropagation(); selectedPage = id; render(); }
+    else if (act) { e.stopPropagation(); move(id, act); } else { selectedPage = id; render(); }
   }));
   const p = list.find(x => x.id === selectedPage);
   $('#empty').hidden = !!p; $('#page').hidden = !p;
