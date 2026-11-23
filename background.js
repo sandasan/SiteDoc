@@ -1,8 +1,63 @@
-if(typeof importScripts==='function')importScripts('store.js');
+if(typeof importScripts==='function')importScripts('store.js','capture.js');
 const RESUME_ALARM='sitedoc-task-resume';
 let scanRunning=false;
 let importRunning=false;
 const canonical=value=>{try{const u=new URL(value);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return String(value||'');}};
+const PAGE_CONTEXTS=['page','selection','link','image'];
+
+function installContextMenus(){
+  chrome.contextMenus.removeAll(()=>{
+    chrome.contextMenus.create({id:'sitedoc-context',title:'SiteDoc',contexts:PAGE_CONTEXTS});
+    chrome.contextMenus.create({id:'sitedoc-save-page',parentId:'sitedoc-context',title:'Сохранить эту страницу',contexts:PAGE_CONTEXTS});
+    chrome.contextMenus.create({id:'sitedoc-scan-section',parentId:'sitedoc-context',title:'Найти страницы текущего раздела',contexts:PAGE_CONTEXTS});
+    chrome.contextMenus.create({id:'sitedoc-scan-site',parentId:'sitedoc-context',title:'Найти все разделы сайта',contexts:PAGE_CONTEXTS});
+    chrome.contextMenus.create({id:'sitedoc-select-menu',parentId:'sitedoc-context',title:'Выбрать страницы в меню сайта',contexts:PAGE_CONTEXTS});
+    chrome.contextMenus.create({id:'sitedoc-open-library',parentId:'sitedoc-context',title:'Открыть коллекцию SiteDoc',contexts:PAGE_CONTEXTS});
+  });
+}
+
+if(chrome.contextMenus){
+  chrome.runtime.onInstalled.addListener(installContextMenus);
+  chrome.contextMenus.onClicked.addListener((info,tab)=>{void handleContextMenuAction(info.menuItemId,tab);});
+}
+
+async function handleContextMenuAction(id,tab){
+  if(!tab?.id)return;
+  const permissionRequest=id==='sitedoc-save-page'?chrome.permissions.request({origins:['<all_urls>']}).catch(()=>false):Promise.resolve(false);
+  try{
+    if(id==='sitedoc-save-page'){
+      await updateActionIndicator({type:'single-save',phase:'running'});
+      await permissionRequest;
+      const data=await captureCurrent(tab.id);
+      let collections=await SiteDocStore.getCollections();
+      const saved=await chrome.storage.local.get('selectedCollectionId');
+      let collection=collections.find(item=>item.id===saved.selectedCollectionId);
+      if(!collection){collection={id:crypto.randomUUID(),title:'Моя коллекция',items:[]};collections=[...collections,collection];await chrome.storage.local.set({selectedCollectionId:collection.id});}
+      const result=savePage(collection,data,false);
+      if(result!=='skipped')await SiteDocStore.saveCollections(collections);
+      const message=result==='skipped'?`Уже сохранено: ${data.title}`:`Страница ${result==='updated'?'обновлена':'сохранена'}: ${data.title}${data.offlineMissingAssets?.length?`, не скачано ресурсов ${data.offlineMissingAssets.length}`:''}`;
+      await updateActionIndicator({type:'single-save',phase:'complete',message});
+      return;
+    }
+    if(id==='sitedoc-open-library'){
+      await chrome.tabs.create({url:chrome.runtime.getURL('library.html')});
+      return;
+    }
+    if(id==='sitedoc-select-menu'){
+      await chrome.scripting.executeScript({target:{tabId:tab.id},files:['page-editor.js']});
+      await updateActionIndicator({type:'single-save',phase:'complete',message:'Режим выбора включён на странице'});
+      return;
+    }
+    if(id==='sitedoc-scan-section'||id==='sitedoc-scan-site'){
+      const scope=id==='sitedoc-scan-section'?'section':'site';
+      const url=new URL('popup.html',chrome.runtime.getURL('/'));
+      url.searchParams.set('fullscreen','1');url.searchParams.set('targetTabId',String(tab.id));url.searchParams.set('scanScope',scope);
+      await chrome.tabs.create({url:url.href});
+    }
+  }catch(error){
+    await updateActionIndicator({type:'single-save',phase:'error',message:error.message});
+  }
+}
 
 async function updateActionIndicator(job){
   const clear=async()=>{await chrome.action.setBadgeText({text:''});await chrome.action.setTitle({title:'SiteDoc — Добавить или сохранить страницу'});};
