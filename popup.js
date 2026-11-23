@@ -119,7 +119,7 @@ function scheduleWaitRefresh(){
 }
 
 function renderAddButton(){
-  const checked=sectionList.querySelectorAll('input[type=checkbox]:checked').length;
+  const {checked,newCount,existingCount}=getSelectionSummary();
   const job=activeJobState;
   addSelected.classList.remove('is-progress','is-complete','is-stopped','is-scan');
   addSelected.style.setProperty('--progress','0%');
@@ -146,8 +146,22 @@ function renderAddButton(){
   if(job?.type==='scan'&&['running','starting','stopping'].includes(job.phase)){
     addSelected.classList.add('is-scan');addSelected.textContent=job.scope==='section'?'Поиск страниц раздела…':'Поиск всех страниц…';addSelected.disabled=true;return;
   }
-  addSelected.textContent=checked?`Добавить выбранные (${checked})`:'Выберите страницы';
+  addSelected.textContent=checked
+    ? newCount&&existingCount ? `Добавить ${newCount} новых · обновить ${existingCount}`
+      : existingCount ? `Обновить ${existingCount} сохранённых`
+      : `Добавить ${newCount} страниц`
+    : 'Выберите страницы';
   addSelected.disabled=checked===0;
+}
+
+function getSelectionSummary(){
+  const boxes=[...sectionList.querySelectorAll('input[type=checkbox]')];
+  const checkedBoxes=boxes.filter(input=>input.checked);
+  const library=collections.find(item=>item.id===select.value);
+  const canonical=value=>{try{const url=new URL(value);url.hash='';if(url.pathname.length>1)url.pathname=url.pathname.replace(/\/+$/,'');return url.href;}catch{return String(value||'');}};
+  const savedUrls=new Set((library?.items||[]).filter(item=>item.kind!=='section').map(item=>canonical(item.url)));
+  const existingCount=checkedBoxes.filter(input=>savedUrls.has(canonical(input.value))).length;
+  return {checked:checkedBoxes.length,newCount:checkedBoxes.length-existingCount,existingCount,total:boxes.length};
 }
 
 chrome.storage.onChanged.addListener(async(changes,area)=>{
@@ -578,7 +592,7 @@ async function fetchSelectedPages() {
     const canonical=url=>{try{const u=new URL(url);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return url;}};
     const existingUrls=new Set(collection.items.filter(item=>item.kind!=='section').map(item=>canonical(item.url)));
     const duplicateCount=descriptors.filter(item=>existingUrls.has(canonical(item.url))).length;
-    const updateExisting=duplicateCount?confirm(`В библиотеке уже сохранено страниц из списка: ${duplicateCount}. Обновить эти копии?`):false;
+    const updateExisting=duplicateCount?confirm(`Будет добавлено новых страниц: ${descriptors.length-duplicateCount}. Уже сохранённых страниц будет обновлено: ${duplicateCount}. Продолжить?`):false;
     activeJobState={type:'import',phase:'starting',done:0,total:descriptors.length};renderAddButton();
     chrome.runtime.sendMessage({type:'START_SECTION_IMPORT',tabId:tab.id,items:descriptors,collectionId:collection.id,updateExisting}).catch(error=>{activeJobState={type:'import',phase:'error',done:0,total:descriptors.length};renderAddButton();status.textContent=`Не удалось запустить фоновое сохранение: ${error.message}`;void chrome.storage.local.set({activeJob:{type:'import',phase:'error',done:0,total:descriptors.length,error:error.message}});});
     status.textContent=`Сохранение ${descriptors.length} страниц выполняется в фоне. Popup можно закрыть.`;
@@ -603,9 +617,9 @@ document.querySelector('#editPageMenu').addEventListener('click',async()=>{
 });
 addSelected.addEventListener('click',fetchSelectedPages);
 function updateSelectionCount(){
-  const boxes=[...sectionList.querySelectorAll('input[type=checkbox]')],checked=boxes.filter(x=>x.checked).length;
-  selectedCount.textContent=`${checked} из ${boxes.length}`;
-  selectAll.checked=checked===boxes.length;selectAll.indeterminate=checked>0&&checked<boxes.length;
+  const {checked,newCount,existingCount,total}=getSelectionSummary();
+  selectedCount.textContent=checked?`${newCount} новых · ${existingCount} в библиотеке`:`0 из ${total}`;
+  selectAll.checked=checked===total;selectAll.indeterminate=checked>0&&checked<total;
   renderAddButton();
 }
 sectionList.addEventListener('change',updateSelectionCount);
