@@ -39,20 +39,26 @@
         <span class="action-icon" aria-hidden="true">＋</span>
         <span><b>Сохранить эту страницу</b><small>Добавить или обновить открытую страницу</small></span>
       </button>
-      <button id="findSection" class="secondary action-card">
-        <span class="action-icon" aria-hidden="true">☷</span>
-        <span><b>Обнаружить все разделы</b><small>Автоматически найти все страницы и подразделы</small></span>
-      </button>
-      <button id="findCurrentSection" class="secondary action-card">
-        <span class="action-icon" aria-hidden="true">↳</span>
-        <span><b>Обнаружить текущий раздел</b><small>Найти страницы этого раздела и дочерних подразделов</small></span>
-      </button>
-      <button id="editPageMenu" class="secondary action-card">
-        <span class="action-icon" aria-hidden="true">☑</span>
-        <span><b>Выбирать страницы в меню сайта</b><small>Отметьте разделы прямо на открытой странице</small></span>
-      </button>
       <button id="addSelected" class="primary add-selected" hidden>Добавить выбранные страницы</button>
     </div>
+
+    <details id="collectionTools" class="collection-tools">
+      <summary><b>Собрать раздел сайта</b><small>Найти несколько страниц, проверить список и добавить их в библиотеку</small></summary>
+      <div class="collection-tools-actions">
+        <button id="findCurrentSection" class="secondary action-card">
+          <span class="action-icon" aria-hidden="true">↳</span>
+          <span><b>Текущий раздел</b><small>Найти страницы этого раздела и его подразделов</small></span>
+        </button>
+        <button id="findSection" class="secondary action-card">
+          <span class="action-icon" aria-hidden="true">☷</span>
+          <span><b>Все разделы сайта</b><small>Найти страницы и подразделы в меню документации</small></span>
+        </button>
+        <button id="editPageMenu" class="secondary action-card">
+          <span class="action-icon" aria-hidden="true">☑</span>
+          <span><b>Выбрать в меню сайта</b><small>Отметить разделы прямо на открытой странице</small></span>
+        </button>
+      </div>
+    </details>
 
     <section id="sectionPreview" class="section-preview" hidden aria-label="Найденные страницы">
       <details id="sectionTreeDisclosure" open>
