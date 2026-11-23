@@ -5,17 +5,62 @@ let importRunning=false;
 const canonical=value=>{try{const u=new URL(value);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return String(value||'');}};
 
 async function updateActionIndicator(job){
-  if(job?.phase==='running'||job?.phase==='starting'){
+  const clear=async()=>{await chrome.action.setBadgeText({text:''});await chrome.action.setTitle({title:'SiteDoc — Добавить или сохранить страницу'});};
+  if(!job){await clear();return;}
+  if(job.type==='single-save'){
+    if(job.phase==='running'){
+      await chrome.action.setBadgeBackgroundColor({color:'#39785b'});
+      await chrome.action.setBadgeText({text:'СОХР'});
+      await chrome.action.setTitle({title:'SiteDoc — Сохраняю открытую страницу'});
+    }else if(job.phase==='complete'){
+      await chrome.action.setBadgeBackgroundColor({color:'#39785b'});
+      await chrome.action.setBadgeText({text:'✓'});
+      await chrome.action.setTitle({title:`SiteDoc — ${job.message||'Страница сохранена'}`});
+    }else if(job.phase==='error'){
+      await chrome.action.setBadgeBackgroundColor({color:'#a34440'});
+      await chrome.action.setBadgeText({text:'!'});
+      await chrome.action.setTitle({title:`SiteDoc — Ошибка сохранения: ${job.message||'неизвестная ошибка'}`});
+    }
+    return;
+  }
+  if(['starting','running','stopping','waiting'].includes(job.phase)){
     const total=Math.max(1,Number(job.total)||1),done=Math.max(0,Number(job.done)||0);
     const percent=Math.min(100,Math.floor(done/total*100));
-    const label=job.type==='import'?'Сохранение страниц':'Поиск страниц';
-    await chrome.action.setBadgeBackgroundColor({color:'#39785b'});
-    await chrome.action.setBadgeText({text:`${percent}%`});
-    await chrome.action.setTitle({title:`SiteDoc — ${label}: ${done} из ${total}`});
-  }else{
-    await chrome.action.setBadgeText({text:''});
-    await chrome.action.setTitle({title:'Добавить страницу в SiteDoc'});
+    const isImport=job.type==='import',label=isImport?'Сохранение страниц':'Поиск страниц';
+    const prefix=isImport?'С':'П';
+    let badge=`${prefix}${percent===100?'100':`${percent}%`}`,title=`SiteDoc — ${label}: ${done} из ${total}`;
+    if(job.phase==='starting'){badge='…';title=`SiteDoc — Подготовка: ${label.toLocaleLowerCase()}`;}
+    if(job.phase==='waiting'){
+      badge='ПАУЗ';
+      const seconds=Math.max(0,Math.ceil((Number(job.retryAt)-Date.now())/1000));
+      title=`SiteDoc — Пауза сохранения (${job.stopReason||'ограничение сайта'}), ${done} из ${total}; повтор через ${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
+    }
+    if(job.phase==='stopping'){badge='СТОП';title=`SiteDoc — Останавливаю поиск, проверено ${done} из ${total}`;}
+    await chrome.action.setBadgeBackgroundColor({color:job.phase==='waiting'?'#a7781e':'#39785b'});
+    await chrome.action.setBadgeText({text:badge});
+    await chrome.action.setTitle({title});
+    return;
   }
+  if(job.phase==='complete'){
+    await chrome.action.setBadgeBackgroundColor({color:job.failed||job.stopReason?'#a7781e':'#39785b'});
+    await chrome.action.setBadgeText({text:job.failed||job.stopReason?'!':'✓'});
+    let title;
+    if(job.type==='import')title=`SiteDoc — Сохранение завершено: добавлено ${job.added||0}, обновлено ${job.updated||0}${job.failed?`, ошибок ${job.failed}`:''}${job.incompleteAssets?`, не скачано ресурсов ${job.incompleteAssets}`:''}${job.stopReason?`, остановлено: ${job.stopReason}`:''}`;
+    else if(job.stopReason==='Остановлено пользователем')title=`SiteDoc — Поиск остановлен: проверено ${job.done||0} страниц`;
+    else{
+      const {sectionCandidates=[]}=await chrome.storage.local.get('sectionCandidates');
+      title=`SiteDoc — Поиск завершён: найдено ${sectionCandidates.length} страниц; откройте SiteDoc, чтобы выбрать страницы`;
+    }
+    await chrome.action.setTitle({title});
+    return;
+  }
+  if(job.phase==='error'){
+    await chrome.action.setBadgeBackgroundColor({color:'#a34440'});
+    await chrome.action.setBadgeText({text:'!'});
+    await chrome.action.setTitle({title:`SiteDoc — Ошибка: ${job.error||'фоновая операция прервана'}`});
+    return;
+  }
+  await clear();
 }
 
 chrome.storage.onChanged.addListener((changes,area)=>{
@@ -25,6 +70,14 @@ chrome.runtime.onInstalled.addListener(()=>void chrome.storage.local.get('active
 void chrome.storage.local.get('activeJob').then(({activeJob})=>updateActionIndicator(activeJob));
 
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
+  if(message?.type==='SET_ACTION_STATUS'){
+    chrome.storage.local.get('activeJob').then(({activeJob})=>{
+      if(['starting','running','stopping','waiting'].includes(activeJob?.phase))return updateActionIndicator(activeJob);
+      return updateActionIndicator(message.status);
+    });
+    sendResponse({ok:true});
+    return false;
+  }
   if(message?.type==='FETCH_OFFLINE_ASSET'){
     fetch(message.url,{credentials:'include'}).then(async response=>{
       if(!response.ok){sendResponse({ok:false,status:response.status,retryAfter:response.headers.get('Retry-After')});return;}

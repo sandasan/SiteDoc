@@ -21,6 +21,9 @@ async function requestSiteAccess(){
   try{return await chrome.permissions.request({origins:['<all_urls>']});}
   catch{return false;}
 }
+function setPageSaveIndicator(phase,message=''){
+  chrome.runtime.sendMessage({type:'SET_ACTION_STATUS',status:{type:'single-save',phase,message}}).catch(()=>{});
+}
 
 async function init() {
   const storedCollections = await SiteDocStore.getCollections();
@@ -477,6 +480,7 @@ async function captureCurrent(tabId) {
 
 async function saveCurrent() {
   status.textContent = 'Сохраняю страницу…';
+  setPageSaveIndicator('running');
   try {
     const hasSiteAccess=await requestSiteAccess();
     const [tab] = await chrome.tabs.query({active:true,currentWindow:true});
@@ -484,10 +488,11 @@ async function saveCurrent() {
     const {collections=[]} = await read(['collections']);
     const collection=collections.find(c=>c.id===select.value); if(!collection)throw new Error('Коллекция не найдена');
     const result=saveToCollection(collection,data);
-    if(result==='skipped'){status.textContent='Оставил сохранённую копию без изменений.';return;}
+    if(result==='skipped'){status.textContent='Оставил сохранённую копию без изменений.';setPageSaveIndicator('complete','Сохранённая копия не изменена');return;}
     await SiteDocStore.saveCollections(collections);
     status.textContent = `${result==='updated' ? `Обновлено: ${data.title}` : `Добавлено: ${data.title}`}${data.offlineMissingAssets?.length?`. Не удалось скачать офлайн ресурсов: ${data.offlineMissingAssets.length}`:''}${hasSiteAccess?'':' Доступ к сайтам не предоставлен; часть изображений и стилей может отсутствовать.'}`;
-  } catch(e) { status.textContent=`Не удалось сохранить страницу: ${e.message}`; }
+    setPageSaveIndicator('complete',result==='updated'?`Копия обновлена: ${data.title}`:`Страница сохранена: ${data.title}`);
+  } catch(e) { status.textContent=`Не удалось сохранить страницу: ${e.message}`;setPageSaveIndicator('error',e.message); }
 }
 
 async function findSectionLinks(scope='site') {
