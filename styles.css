@@ -87,16 +87,12 @@
 .popup .new-library-toggle{flex:0 0 36px;width:36px;height:36px;margin:4px 0 12px;padding:0;border:1px solid var(--line);background:#fff;color:var(--green);font-size:20px}
 .popup .rename-library-toggle{flex:0 0 36px;width:36px;height:36px;margin:4px 0 12px;padding:0;border:1px solid var(--line);background:#fff;color:var(--green);font-size:17px}
 .popup .rename-library-toggle:disabled{opacity:.5;cursor:not-allowed}
-.popup .delete-library-toggle{flex:0 0 36px;width:36px;height:36px;margin:4px 0 12px;padding:0;border:1px solid #eed0ce;background:#fff7f6;color:#9e3b38;font-size:20px}
-.popup .delete-library-toggle:disabled{opacity:.5;cursor:not-allowed}
 .create-library{display:flex;align-items:center;gap:6px;margin:-4px 0 12px}
 .create-library[hidden]{display:none}
 .create-library input{min-width:0;flex:1;padding:8px}
 .popup .create-library button{width:auto;margin:0;padding:8px 10px;white-space:nowrap}
 .popup .create-library button[type="button"]{width:34px;padding:7px;background:#edf2ef;font-size:18px}
 .visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-.popup .delete-libraries{display:block;width:auto;margin:-7px 0 11px auto;padding:2px 0;background:transparent;color:#a34440;font-size:10px;font-weight:500}
-.popup .delete-libraries:disabled{display:none}
 .popup-brand{position:relative;padding-right:36px}
 .popup .expand-popup{position:absolute;right:0;top:0;width:32px;height:32px;margin:0;padding:0;border:1px solid var(--line);background:#fff;color:var(--green);font-size:19px}
 .section-row{border-bottom:1px solid #edf0ee}
@@ -136,3 +132,10 @@
 .popup .collection-tools-actions .action-card{min-height:50px;padding:8px 10px}
 .popup .collection-tools-actions .action-card b{font-size:12px}
 .popup .collection-tools-actions .action-card small{font-size:10px}
+.library-tools{margin:-4px 0 12px}
+.library-tools>summary{width:max-content;cursor:pointer;color:#77837e;font-size:10px}
+.library-tools>summary:focus-visible{outline:2px solid #69a78e;outline-offset:2px;border-radius:3px}
+.library-tools-actions{display:flex;gap:7px;margin-top:7px}
+.popup .library-tools-actions button{width:auto;margin:0;padding:5px 8px;border:1px solid var(--line);background:#fff;font-size:10px;color:#69766f}
+.popup .library-tools-actions button.danger{border-color:#eed0ce;background:#fff7f6;color:#9e3b38}
+.popup .library-tools-actions button:disabled{opacity:.5;cursor:not-allowed}

@@ -192,7 +192,6 @@ function renderLibrarySelect(selectedId) {
   }
   document.querySelector('#save').disabled = !collections.length;
   syncScanButtons();
-  document.querySelector('#deleteAllLibraries').disabled = !collections.length;
   document.querySelector('#clearLibrary').disabled = !collections.length;
   document.querySelector('#deleteLibrary').disabled = !collections.length;
   document.querySelector('#showRenameLibrary').disabled = !collections.length;
@@ -264,16 +263,6 @@ createLibraryForm.addEventListener('submit', async event => {
   renderLibrarySelect(created.id);
   createLibraryForm.reset(); createLibraryForm.hidden = true;
   status.textContent = `Создана библиотека «${created.title}». Страницы будут добавляться сюда.`;
-});
-document.querySelector('#deleteAllLibraries').addEventListener('click', async () => {
-  const pageCount = collections.reduce((sum, library) => sum + library.items.filter(item => item.kind !== 'section').length, 0);
-  if (!confirm(`Удалить все ${collections.length} библиотек и ${pageCount} сохранённых страниц? Это действие нельзя отменить.`)) return;
-  collections = [];
-  await SiteDocStore.saveCollections([]);
-  await chrome.storage.local.set({ selectedCollectionId: '' });
-  renderLibrarySelect('');
-  preview.hidden = true; addSelected.hidden = true;
-  status.textContent = 'Все библиотеки удалены. Создайте новую, чтобы продолжить.';
 });
 document.querySelector('#clearLibrary').addEventListener('click', async () => {
   const library = collections.find(item => item.id === select.value);
