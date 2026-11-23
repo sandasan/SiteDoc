@@ -42,7 +42,7 @@ async function refreshSizes() {
 
 async function init() {
   collections = await SiteDocStore.getCollections();
-  if (!collections.length) { collections = [{ id: crypto.randomUUID(), title: 'Моя библиотека', items: [] }]; await persist(); }
+  if (!collections.length) { collections = [{ id: crypto.randomUUID(), title: 'Моя коллекция', items: [] }]; await persist(); }
   selectedCollection = collections[0]?.id || ''; render();
   const {activeJob} = await chrome.storage.local.get('activeJob');
   renderJobStatus(activeJob);

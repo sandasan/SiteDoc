@@ -28,7 +28,7 @@ async function init() {
   sectionTreeDisclosure.open = saved.sectionTreeExpanded !== false;
   collections = storedCollections;
   if (!Array.isArray(saved.collections)) {
-    const first = { id: crypto.randomUUID(), title: 'Моя библиотека', items: [] };
+    const first = { id: crypto.randomUUID(), title: 'Моя коллекция', items: [] };
     collections = [first];
     saved.selectedCollectionId = first.id;
     await SiteDocStore.saveCollections(collections);
@@ -68,7 +68,7 @@ function renderCandidates(items,currentUrl='',scope=activeJobState?.scope||'site
     const ownPath=nodes.map(key);
     const descendants=paths.filter(candidate=>candidate.nodes.length>nodes.length&&nodes.every((node,index)=>key(node)===key(candidate.nodes[index])));
     const bulk=descendants.length?`<button type="button" class="subsection-toggle" data-node="${esc(ownPath.join('|'))}" title="Выбрать или снять все страницы этого подраздела и вложенных подразделов">Выбрать подраздел (${descendants.length+1})</button>`:'';
-    return `<div class="section-row"><label class="section-link ${isCurrent?'is-current':''} ${depth?'is-descendant':''}" style="--depth:${depth}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${alreadySaved?'<span class="current-badge saved-badge">Уже в библиотеке</span>':''}${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>${bulk}</div>`;
+    return `<div class="section-row"><label class="section-link ${isCurrent?'is-current':''} ${depth?'is-descendant':''}" style="--depth:${depth}"><input type="checkbox" value="${esc(item.url)}" checked><span class="section-copy"><span class="section-title">${esc(item.title)}</span><small>${esc(path)}</small></span>${alreadySaved?'<span class="current-badge saved-badge">Уже в коллекции</span>':''}${isCurrent?'<span class="current-badge">Открыта</span>':''}</label>${bulk}</div>`;
   }).join('');
   selectAll.checked=true;selectAll.indeterminate=false;updateSelectionCount();preview.hidden=false;addSelected.hidden=false;
 }
@@ -197,7 +197,7 @@ function syncScanButtons(){
 
 function renderLibrarySelect(selectedId) {
   if (!collections.length) {
-    select.innerHTML = '<option value="" selected>Сначала создайте библиотеку</option>';
+    select.innerHTML = '<option value="" selected>Сначала создайте коллекцию</option>';
     select.disabled = true;
   } else {
     select.innerHTML = collections.map(c => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join('');
@@ -247,7 +247,7 @@ renameLibraryForm.addEventListener('submit', async event => {
   if (!library || !title) return;
   const duplicate = collections.find(item => item.id !== library.id && item.title.trim().toLocaleLowerCase() === title.toLocaleLowerCase());
   if (duplicate) {
-    status.textContent = `Библиотека «${duplicate.title}» уже существует.`;
+    status.textContent = `Коллекция «${duplicate.title}» уже существует.`;
     return;
   }
   if (title === library.title) { renameLibraryForm.hidden = true; return; }
@@ -256,7 +256,7 @@ renameLibraryForm.addEventListener('submit', async event => {
   await SiteDocStore.saveCollections(collections);
   renderLibrarySelect(library.id);
   renameLibraryForm.reset(); renameLibraryForm.hidden = true;
-  status.textContent = `Библиотека «${previousTitle}» переименована в «${title}».`;
+  status.textContent = `Коллекция «${previousTitle}» переименована в «${title}».`;
 });
 createLibraryForm.addEventListener('submit', async event => {
   event.preventDefault();
@@ -266,7 +266,7 @@ createLibraryForm.addEventListener('submit', async event => {
   if (existing) {
     select.value = existing.id;
     await chrome.storage.local.set({ selectedCollectionId: existing.id });
-    status.textContent = `Библиотека «${existing.title}» уже есть — выбрал её.`;
+    status.textContent = `Коллекция «${existing.title}» уже есть — выбрал её.`;
     createLibraryForm.hidden = true; createLibraryForm.reset();
     return;
   }
@@ -276,25 +276,25 @@ createLibraryForm.addEventListener('submit', async event => {
   await chrome.storage.local.set({ selectedCollectionId: created.id });
   renderLibrarySelect(created.id);
   createLibraryForm.reset(); createLibraryForm.hidden = true;
-  status.textContent = `Создана библиотека «${created.title}». Страницы будут добавляться сюда.`;
+  status.textContent = `Создана коллекция «${created.title}». Страницы будут добавляться сюда.`;
 });
 document.querySelector('#clearLibrary').addEventListener('click', async () => {
   const library = collections.find(item => item.id === select.value);
   if (!library) return;
   const pageCount = library.items.filter(item => item.kind !== 'section').length;
-  if (!library.items.length) { status.textContent = `Библиотека «${library.title}» уже пуста.`; return; }
-  if (!confirm(`Очистить библиотеку «${library.title}» и удалить ${pageCount} сохранённых страниц? Библиотека останется.`)) return;
+  if (!library.items.length) { status.textContent = `Коллекция «${library.title}» уже пуста.`; return; }
+  if (!confirm(`Очистить коллекцию «${library.title}» и удалить ${pageCount} сохранённых страниц? Коллекция останется.`)) return;
   library.items = [];
   await SiteDocStore.saveCollections(collections);
   preview.hidden = true; addSelected.hidden = true;
-  status.textContent = `Библиотека «${library.title}» очищена.`;
+  status.textContent = `Коллекция «${library.title}» очищена.`;
 });
 document.querySelector('#deleteLibrary').addEventListener('click', async () => {
   const library = collections.find(item => item.id === select.value);
   if (!library) return;
   const pageCount = library.items.filter(item => item.kind !== 'section').length;
   const detail = pageCount ? ` вместе с ${pageCount} сохранёнными страницами` : ' (она пуста)';
-  if (!confirm(`Удалить библиотеку «${library.title}»${detail}? Это действие нельзя отменить.`)) return;
+  if (!confirm(`Удалить коллекцию «${library.title}»${detail}? Это действие нельзя отменить.`)) return;
   const index = collections.findIndex(item => item.id === library.id);
   collections = collections.filter(item => item.id !== library.id);
   const next = collections[Math.min(index, collections.length - 1)];
@@ -302,8 +302,8 @@ document.querySelector('#deleteLibrary').addEventListener('click', async () => {
   await chrome.storage.local.set({ selectedCollectionId: next?.id || '' });
   renderLibrarySelect(next?.id || '');
   status.textContent = next
-    ? `Библиотека «${library.title}» удалена. Выбрана «${next.title}».`
-    : `Библиотека «${library.title}» удалена. Создайте новую, чтобы продолжить.`;
+    ? `Коллекция «${library.title}» удалена. Выбрана «${next.title}».`
+    : `Коллекция «${library.title}» удалена. Создайте новую, чтобы продолжить.`;
 });
 
 function normalizeUrl(value) {
@@ -593,7 +593,7 @@ async function fetchSelectedPages() {
     if(!tab)[tab]=await chrome.tabs.query({active:true,currentWindow:true});
     const descriptors=[...sectionList.querySelectorAll('input:checked')].map(input=>({url:input.value,...(candidatePages.get(input.value)||{})}));
     const {collections=[]}=await read(['collections']);
-    const collection=collections.find(c=>c.id===select.value);if(!collection)throw new Error('Выбранная библиотека больше не существует.');
+    const collection=collections.find(c=>c.id===select.value);if(!collection)throw new Error('Выбранная коллекция больше не существует.');
     const canonical=url=>{try{const u=new URL(url);u.hash='';if(u.pathname.length>1)u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return url;}};
     const existingUrls=new Set(collection.items.filter(item=>item.kind!=='section').map(item=>canonical(item.url)));
     const duplicateCount=descriptors.filter(item=>existingUrls.has(canonical(item.url))).length;
@@ -623,7 +623,7 @@ document.querySelector('#editPageMenu').addEventListener('click',async()=>{
 addSelected.addEventListener('click',fetchSelectedPages);
 function updateSelectionCount(){
   const {checked,newCount,existingCount,total}=getSelectionSummary();
-  selectedCount.textContent=checked?`${newCount} новых · ${existingCount} в библиотеке`:`0 из ${total}`;
+  selectedCount.textContent=checked?`${newCount} новых · ${existingCount} в коллекции`:`0 из ${total}`;
   selectAll.checked=checked===total;selectAll.indeterminate=checked>0&&checked<total;
   renderAddButton();
 }

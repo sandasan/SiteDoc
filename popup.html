@@ -12,28 +12,28 @@
       <button id="expandPopup" class="expand-popup" type="button" title="Открыть на весь экран" aria-label="Открыть на весь экран">⛶</button>
     </header>
 
-    <label for="collection">Библиотека для сохранения</label>
+    <label for="collection">Коллекция для сохранения</label>
     <div class="library-picker">
       <select id="collection"></select>
-      <button id="showCreateLibrary" class="new-library-toggle" type="button" title="Создать библиотеку">＋</button>
-      <button id="showRenameLibrary" class="rename-library-toggle" type="button" title="Переименовать выбранную библиотеку" aria-label="Переименовать выбранную библиотеку">✎</button>
+      <button id="showCreateLibrary" class="new-library-toggle" type="button" title="Создать коллекцию">＋</button>
+      <button id="showRenameLibrary" class="rename-library-toggle" type="button" title="Переименовать выбранную коллекцию" aria-label="Переименовать выбранную коллекцию">✎</button>
     </div>
     <details class="library-tools">
-      <summary>Управление библиотекой</summary>
+      <summary>Управление коллекцией</summary>
       <div class="library-tools-actions">
         <button id="clearLibrary" type="button">Очистить страницы</button>
-        <button id="deleteLibrary" class="danger" type="button">Удалить библиотеку</button>
+        <button id="deleteLibrary" class="danger" type="button">Удалить коллекцию</button>
       </div>
     </details>
     <form id="createLibraryForm" class="create-library" hidden>
-      <label class="visually-hidden" for="libraryName">Название библиотеки</label>
-      <input id="libraryName" type="text" maxlength="80" placeholder="Название новой библиотеки" autocomplete="off" required>
+      <label class="visually-hidden" for="libraryName">Название коллекции</label>
+      <input id="libraryName" type="text" maxlength="80" placeholder="Название новой коллекции" autocomplete="off" required>
       <button class="primary" type="submit">Создать</button>
       <button id="cancelCreateLibrary" type="button" aria-label="Отменить создание">×</button>
     </form>
     <form id="renameLibraryForm" class="create-library" hidden>
-      <label class="visually-hidden" for="renamedLibraryName">Новое название библиотеки</label>
-      <input id="renamedLibraryName" type="text" maxlength="80" placeholder="Новое название библиотеки" autocomplete="off" required>
+      <label class="visually-hidden" for="renamedLibraryName">Новое название коллекции</label>
+      <input id="renamedLibraryName" type="text" maxlength="80" placeholder="Новое название коллекции" autocomplete="off" required>
       <button class="primary" type="submit">Сохранить</button>
       <button id="cancelRenameLibrary" type="button" aria-label="Отменить переименование">×</button>
     </form>
@@ -48,7 +48,7 @@
     </div>
 
     <details id="collectionTools" class="collection-tools">
-      <summary><b>Собрать раздел сайта</b><small>Найти несколько страниц, проверить список и добавить их в библиотеку</small></summary>
+      <summary><b>Собрать раздел сайта</b><small>Найти несколько страниц, проверить список и добавить их в коллекцию</small></summary>
       <div class="collection-tools-actions">
         <button id="findCurrentSection" class="secondary action-card">
           <span class="action-icon" aria-hidden="true">↳</span>
@@ -80,7 +80,7 @@
 
     <p id="status" class="status" role="status" aria-live="polite"></p>
     <button id="stopScan" class="stop-scan" type="button" hidden>Остановить сканирование</button>
-    <footer class="popup-footer"><a href="library.html" target="_blank">Открыть библиотеку <span aria-hidden="true">↗</span></a></footer>
+    <footer class="popup-footer"><a href="library.html" target="_blank">Открыть коллекцию <span aria-hidden="true">↗</span></a></footer>
   </main>
   <script src="store.js"></script><script src="popup.js"></script>
 </body>
