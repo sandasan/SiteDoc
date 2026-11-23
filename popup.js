@@ -52,9 +52,27 @@ async function init() {
     renderCandidates(saved.sectionCandidates,tab?.url||'',saved.activeJob?.scope||'site');
   }
   showJob(saved.activeJob);
+  void refreshShortcutStatus();
   const scanScope=new URLSearchParams(location.search).get('scanScope');
   if(scanScope==='section'||scanScope==='site')void findSectionLinks(scanScope);
 }
+
+async function refreshShortcutStatus(){
+  const status=document.querySelector('#shortcutStatus');
+  const labels={'save-current-page':'Сохранить страницу','scan-current-section':'Найти текущий раздел','open-collection':'Открыть коллекцию'};
+  try{
+    const commands=await chrome.commands.getAll();
+    const ownCommands=Object.keys(labels).map(name=>commands.find(command=>command.name===name)||{name,shortcut:''});
+    const assigned=ownCommands.filter(command=>command.shortcut).map(command=>`${labels[command.name]} — ${command.shortcut}`);
+    const unassigned=ownCommands.filter(command=>!command.shortcut).map(command=>labels[command.name]);
+    status.textContent=`${assigned.length?`Назначены: ${assigned.join('; ')}. `:''}${unassigned.length?`Нет активной комбинации: ${unassigned.join(', ')}. Chrome мог обнаружить конфликт; назначьте другое сочетание в настройках.`:'Все команды получили комбинации.'}`;
+  }catch(error){status.textContent=`Не удалось проверить сочетания клавиш: ${error.message}`;}
+}
+
+document.querySelector('#openShortcuts').addEventListener('click',async()=>{
+  try{await chrome.tabs.create({url:'chrome://extensions/shortcuts'});}
+  catch{document.querySelector('#shortcutStatus').textContent='Откройте chrome://extensions/shortcuts и назначьте сочетания для SiteDoc.';}
+});
 
 sectionTreeDisclosure.addEventListener('toggle', () => {
   void chrome.storage.local.set({ sectionTreeExpanded: sectionTreeDisclosure.open });

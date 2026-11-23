@@ -130,6 +130,11 @@
 .item-size{flex:0 0 auto;color:#728078;font-size:10px;white-space:nowrap}
 
 .popup .stop-scan{width:100%;margin:4px 0 8px;padding:8px;border:1px solid #e8c9c6;background:#fff7f6;color:#9e3b38;font-size:12px;font-weight:650}.popup .stop-scan:disabled{opacity:.65;cursor:wait}.popup .stop-scan[hidden]{display:none}
+.shortcut-tools{margin-top:10px;border-top:1px solid #e5ebe7;padding-top:8px}
+.shortcut-tools>summary{width:max-content;cursor:pointer;color:#66756d;font-size:11px;font-weight:600}
+.shortcut-tools>summary:focus-visible{outline:2px solid #69a78e;outline-offset:2px;border-radius:3px}
+.shortcut-status,.shortcut-help{margin:6px 0;color:#64716c;font-size:10px;line-height:1.4}
+.popup .shortcut-tools button{width:auto;margin:0;padding:5px 8px;border:1px solid var(--line);background:#fff;color:#426856;font-size:10px}
 .collection-tools{margin-top:12px;border:1px solid var(--line);border-radius:10px;background:#fff}
 .collection-tools>summary{display:grid;gap:2px;padding:10px 12px;cursor:pointer;list-style:none}
 .collection-tools>summary::-webkit-details-marker{display:none}

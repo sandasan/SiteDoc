@@ -20,6 +20,14 @@ if(chrome.contextMenus){
   chrome.runtime.onInstalled.addListener(installContextMenus);
   chrome.contextMenus.onClicked.addListener((info,tab)=>{void handleContextMenuAction(info.menuItemId,tab);});
 }
+if(chrome.commands)chrome.commands.onCommand.addListener((command,tab)=>{
+  const action={
+    'save-current-page':'sitedoc-save-page',
+    'scan-current-section':'sitedoc-scan-section',
+    'open-collection':'sitedoc-open-library'
+  }[command];
+  if(action)void handleContextMenuAction(action,tab);
+});
 
 async function handleContextMenuAction(id,tab){
   if(!tab?.id)return;

@@ -80,6 +80,12 @@
 
     <p id="status" class="status" role="status" aria-live="polite"></p>
     <button id="stopScan" class="stop-scan" type="button" hidden>Остановить сканирование</button>
+    <details class="shortcut-tools">
+      <summary>Комбинации клавиш</summary>
+      <p id="shortcutStatus" class="shortcut-status" role="status" aria-live="polite">Проверяю назначенные сочетания…</p>
+      <p class="shortcut-help">Chrome проверяет конфликты с другими командами и приложениями. Если сочетание не назначилось, выберите другое в настройках.</p>
+      <button id="openShortcuts" type="button">Настроить в Chrome</button>
+    </details>
     <footer class="popup-footer"><a href="library.html" target="_blank">Открыть коллекцию <span aria-hidden="true">↗</span></a></footer>
   </main>
   <script src="store.js"></script><script src="capture.js"></script><script src="popup.js"></script>
