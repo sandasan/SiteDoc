@@ -97,14 +97,41 @@ function render(refreshSize = true) {
   $('#clearCollection').disabled = !current() || !items().length;
   $('#deleteCollection').disabled = !current();
   const list = items();
-  $('#outline').innerHTML = list.map((p, i) => {
+  const query = $('#outlineSearch').value.trim().toLocaleLowerCase();
+  let visibleItems = list;
+  if (query) {
+    const matches = list.filter(item => `${item.title} ${item.url || ''}`.toLocaleLowerCase().includes(query));
+    const visibleIds = new Set(matches.map(item => item.id));
+    const ancestorsOf = item => {
+      let parentId = item.parentId, depth = 0;
+      while (parentId && depth++ < list.length) {
+        visibleIds.add(parentId);
+        parentId = list.find(candidate => candidate.id === parentId)?.parentId;
+      }
+    };
+    const addDescendants = parentId => {
+      for (const item of list) if (item.parentId === parentId && !visibleIds.has(item.id)) {
+        visibleIds.add(item.id);
+        if (item.kind === 'section') addDescendants(item.id);
+      }
+    };
+    matches.forEach(item => { ancestorsOf(item); if (item.kind === 'section') addDescendants(item.id); });
+    visibleItems = list.filter(item => visibleIds.has(item.id));
+    $('#outlineSearchStatus').hidden = false;
+    $('#outlineSearchStatus').textContent = matches.length ? `${matches.length} совпадений` : 'Ничего не найдено';
+  } else {
+    $('#outlineSearchStatus').hidden = true;
+    $('#outlineSearchStatus').textContent = '';
+  }
+  $('#outline').classList.toggle('is-filtered', !!query);
+  $('#outline').innerHTML = visibleItems.map((p, i) => {
     let level = 0, parent = p.parentId;
     while (parent && level < 3) { level++; parent = list.find(x => x.id === parent)?.parentId; }
     level = Math.min(3, level);
     const checkbox = p.kind === 'section' ? '' : `<input class="page-selector" data-select-page="${esc(p.id)}" type="checkbox" aria-label="Выбрать ${esc(p.title)} для удаления" ${selectedForDelete.has(p.id) ? 'checked' : ''}>`;
     const size = pageSizes.get(p.id);
     return `<li><div class="outline-item indent-${level} ${p.id === selectedPage ? 'active' : ''}" data-id="${esc(p.id)}">${checkbox}<span class="tree-title" title="${esc(p.url || p.title)}">${p.kind === 'section' ? '▸ ' : ''}${esc(p.title)}</span>${size !== undefined ? `<span class="item-size" title="Оценка размера сохранённых данных">${formatBytes(size)}</span>` : ''}<button class="icon-button" data-act="up" title="Переместить выше" aria-label="Переместить ${esc(p.title)} выше">↑</button><button class="icon-button" data-act="down" title="Переместить ниже" aria-label="Переместить ${esc(p.title)} ниже">↓</button><button class="icon-button" data-act="indent" title="Вложить в предыдущий элемент" aria-label="Вложить ${esc(p.title)} в предыдущий элемент">↳</button><button class="icon-button" data-act="outdent" title="Поднять на один уровень" aria-label="Поднять ${esc(p.title)} на один уровень">↰</button></div></li>`;
-  }).join('') || '<li class="empty small">В этой коллекции пока нет страниц. Откройте страницу и добавьте её через значок расширения.</li>';
+  }).join('') || `<li class="empty small">${query ? 'Совпадений нет. Измените поисковый запрос.' : 'В этой коллекции пока нет страниц. Откройте страницу и добавьте её через значок расширения.'}</li>`;
   $('#outline').querySelectorAll('.outline-item').forEach(row => row.addEventListener('click', e => {
     const id = row.dataset.id, act = e.target.dataset.act;
     if (e.target.matches('[data-select-page]')) {
@@ -201,6 +228,7 @@ function move(id, action) {
   persist().then(render);
 }
 $('#collections').addEventListener('change', e => { selectedCollection = e.target.value; selectedPage = ''; selectedForDelete.clear(); render(); });
+$('#outlineSearch').addEventListener('input', () => render(false));
 $('#addCollection').addEventListener('click', async () => { const title = $('#newCollection').value.trim(); if (!title) return; const c = { id: crypto.randomUUID(), title, items: [] }; collections.push(c); selectedCollection = c.id; selectedPage = ''; $('#newCollection').value = ''; await persist(); render(); });
 $('#renameCollection').addEventListener('click', async () => {
   const collection = current(); if (!collection) return;
